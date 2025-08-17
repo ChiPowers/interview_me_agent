@@ -1,0 +1,26 @@
+# Core runtime
+python-dotenv>=1.0
+streamlit>=1.36
+openai>=1.40
+
+# LangChain + integrations
+langchain>=0.2
+langchain-openai>=0.2
+langchain-community>=0.2
+langgraph>=0.2  # optional, not required in this scaffold but handy later
+langsmith>=0.1.94
+
+# Retrieval & parsing
+faiss-cpu>=1.8.0
+pypdf>=4.3
+langchain-text-splitters>=0.2
+
+# Web
+tavily-python>=0.3
+requests>=2.32
+trafilatura>=1.6
+beautifulsoup4>=4.12
+
+# Utils
+pyyaml>=6.0
+rapidfuzz>=3.9
