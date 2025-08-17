@@ -25,27 +25,62 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------- assets ----------
-LOGO_PATH = "static/logotat.png"
-HEADSHOT_PATH = "static/headshot.png"
-CHATSHOT_PATH = "static/cp_face.png"
+# ---------- assets (robust for local & Streamlit Cloud) ----------
+from pathlib import Path
 
-def _open_image(path):
+def _first_existing_dir(candidates):
+    for p in candidates:
+        if p and p.exists() and p.is_dir():
+            return p
+    return None
+
+APP_FILE = Path(__file__).resolve()
+APP_DIR = APP_FILE.parent                        # repo/app
+REPO_ROOT = APP_DIR.parent                       # repo/
+CWD = Path.cwd()
+
+# Allow override via env: STATIC_DIR=/mount/static
+env_static = Path(os.getenv("STATIC_DIR", "")).resolve() if os.getenv("STATIC_DIR") else None
+
+STATIC_DIR = _first_existing_dir([
+    env_static,
+    REPO_ROOT / "static",     # repo/static
+    APP_DIR / "static",       # repo/app/static
+    CWD / "static",           # cwd/static
+])
+
+if not STATIC_DIR:
+    # Log once; UI will show fallback text
+    logger.warning("No static/ directory found (checked env, repo/static, app/static, cwd/static).")
+
+def _read_image_b64(path: Path) -> str:
     try:
-        return Image.open(path)
-    except Exception:
-        return None
-
-def _img_to_b64(img):
-    if img is None:
+        with open(path, "rb") as f:
+            import base64
+            return base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        logger.warning("Image missing/unreadable: %s (%s)", path, e)
         return ""
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
 
-logo_b64 = _img_to_b64(_open_image(LOGO_PATH))
-headshot_b64 = _img_to_b64(_open_image(HEADSHOT_PATH))
-chatshot_b64 = _img_to_b64(_open_image(CHATSHOT_PATH))
+def _path_if_exists(dirpath: Path, name: str) -> Path | None:
+    if not dirpath:
+        return None
+    p = dirpath / name
+    return p if p.exists() else None
+
+# Try to find each image under the chosen STATIC_DIR
+LOGO_FILE     = _path_if_exists(STATIC_DIR, "logotat.png")
+HEADSHOT_FILE = _path_if_exists(STATIC_DIR, "headshot.png")
+CHATSHOT_FILE = _path_if_exists(STATIC_DIR, "cp_face.png")
+
+logo_b64     = _read_image_b64(LOGO_FILE)     if LOGO_FILE     else ""
+headshot_b64 = _read_image_b64(HEADSHOT_FILE) if HEADSHOT_FILE else ""
+chatshot_b64 = _read_image_b64(CHATSHOT_FILE) if CHATSHOT_FILE else ""
+
+# Debug logging so you can see what Cloud/local picked
+logger.info("STATIC_DIR: %s", str(STATIC_DIR) if STATIC_DIR else "None")
+logger.info("Assets found -> logo:%s headshot:%s chatshot:%s",
+            bool(logo_b64), bool(headshot_b64), bool(chatshot_b64))
 
 # ---------- styles ----------
 st.markdown(
@@ -103,8 +138,10 @@ st.markdown(
 # ---------- sidebar ----------
 with st.sidebar:
     if headshot_b64:
-        st.image(HEADSHOT_PATH, width=160, caption="Chivon Powers, PhD")
-    st.markdown("[LinkedIn](https://www.linkedin.com/in/chivon-powers-phd-a6730610/) · [GitHub](https://github.com/Chipowers/)")
+        st.image(f"data:image/png;base64,{headshot_b64}", width=160, caption="Chivon Powers, PhD")
+        st.markdown("[LinkedIn](https://www.linkedin.com/in/chivon-powers-phd-a6730610/) · [GitHub](https://github.com/Chipowers/)")
+    else:
+        st.info("Headshot image not found in /static (see logs).")
 
 # ---------- ensure index ready once ----------
 @st.cache_resource(show_spinner="Preparing search index…")

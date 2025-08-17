@@ -1,7 +1,7 @@
 # agent/lc_controller.py
 from __future__ import annotations
 from typing import Dict, Any, Optional, List, Tuple
-import os, re, traceback
+import os, re, json, traceback
 
 from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_tool_calling_agent
@@ -35,19 +35,26 @@ def _finalize_from_steps(question: str, steps: List[Tuple[Any, Any]]) -> str:
     local_bits, urls, texts = [], [], []
     url_re = re.compile(r"https?://\S+")
     for (_act, obs) in steps[-3:]:
-        if not isinstance(obs, str):
+        if isinstance(obs, (list, dict)):
+            try:
+                s = json.dumps(obs)[:2000]
+            except Exception:
+                s = str(obs)[:2000]
+        else:
+            s = str(obs) if obs is not None else ""
+        if not s:
             continue
-        texts.append(obs[:1200])
-        for line in obs.splitlines()[:8]:
+        texts.append(s[:1200])
+        for line in s.splitlines()[:8]:
             if "local • " in line and len(local_bits) < 2:
                 local_bits.append(line.strip())
         if len(urls) < 3:
-            urls.extend(url_re.findall(obs))
+            urls.extend(url_re.findall(s))
         if len(local_bits) >= 2 and len(urls) >= 2:
             break
     urls = list(dict.fromkeys(urls))[:3]
 
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4.1-nano"), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.2)
     compose = ChatPromptTemplate.from_messages([
         ("system",
          "You are Chivon. Write a final interview answer:\n"
@@ -84,11 +91,10 @@ def _local_context_from_faiss(question: str, k: int = 6) -> str:
 
 
 def make_executor() -> AgentExecutor:
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4.1-nano"), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.2)
     tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
     agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=PROMPT)
 
-    # IMPORTANT: tell memory which key is the user input/output
     memory = ConversationBufferWindowMemory(
         k=8,
         memory_key="chat_history",
@@ -144,20 +150,47 @@ class LCController:
         if not text or "Agent stopped" in text:
             text = _finalize_from_steps(question, steps)
 
-        # -------------------- citations (with fallback to local_ctx) --------------------
+        # -------------------- citations (robust + fallback to local_ctx) --------------------
         url_pattern = re.compile(r"https?://\S+")
         local_re = re.compile(r"local\s•\s(?P<file>.+?)\s+p\.(?P<page>\d+)", re.IGNORECASE)
 
         web_urls: List[str] = []
         local_labels: List[Dict[str, str]] = []
 
-        def harvest(text_block: str):
-            if not isinstance(text_block, str) or not text_block:
+        def harvest_any(obj: Any):
+            """Extract URLs and local labels from strings, lists, dicts, or JSON-like strings."""
+            if obj is None:
                 return
-            # URLs
-            web_urls.extend(url_pattern.findall(text_block))
-            # Local labels (look at first several lines for labels)
-            for line in text_block.splitlines()[:20]:
+            # If list/dict, walk it
+            if isinstance(obj, list):
+                for it in obj:
+                    harvest_any(it)
+                return
+            if isinstance(obj, dict):
+                # Common Tavily schema: items with 'url'
+                u = obj.get("url") or obj.get("link") or obj.get("source")
+                if isinstance(u, str):
+                    web_urls.append(u)
+                # Recurse into nested fields
+                for v in obj.values():
+                    harvest_any(v)
+                return
+            # Otherwise treat as string
+            s = str(obj)
+            if not s:
+                return
+            # Try JSON parse (if looks like it)
+            s_stripped = s.strip()
+            if (s_stripped.startswith("{") and s_stripped.endswith("}")) or (s_stripped.startswith("[") and s_stripped.endswith("]")):
+                try:
+                    parsed = json.loads(s_stripped)
+                    harvest_any(parsed)
+                except Exception:
+                    pass
+            # URLs in raw text
+            web_urls.extend(url_pattern.findall(s))
+            # Local labels near the top
+            for line in s.splitlines()[:30]:
                 m = local_re.search(line.strip())
                 if m:
                     local_labels.append({
@@ -166,13 +199,12 @@ class LCController:
                         "page": m.group("page"),
                     })
 
-        # 1) harvest from tool observations if any
+        # 1) harvest from tool observations
         for (_a, obs) in steps:
-            harvest(obs)
-
-        # 2) fallback: if nothing found, harvest from the pre-injected local context
+            harvest_any(obs)
+        # 2) fallback to local_ctx if nothing found
         if not web_urls and not local_labels:
-            harvest(local_ctx)
+            harvest_any(local_ctx)
 
         # de-dup & cap
         def _dedup(seq, key=lambda x: x):
@@ -184,8 +216,8 @@ class LCController:
                 seen.add(k); out_list.append(x)
             return out_list
 
-        web_urls = _dedup(web_urls)[:3]
-        local_labels = _dedup(local_labels, key=lambda d: d["label"])[:3]
+        web_urls = _dedup(web_urls)[:5]
+        local_labels = _dedup(local_labels, key=lambda d: d["label"])[:5]
 
         # structured footnotes dict
         footnotes_map: Dict[int, Dict[str, str]] = {}
@@ -200,13 +232,27 @@ class LCController:
             idx += 1
         # -------------------------------------------------------------------------------
 
+        # -------------------- normalize markers in final text --------------------
+        # Replace any [number] in order of appearance with [1..N] based on available footnotes
+        if footnotes_map:
+            marker_re = re.compile(r"\[(\d+)\]")
+            seen_positions: List[int] = []
+            def repl(m):
+                seen_positions.append(1)
+                return f"[{len(seen_positions)}]"
+            text = marker_re.sub(repl, text)
+        else:
+            # If there are markers but no footnotes, strip dangling markers to reduce confusion
+            text = re.sub(r"\s*\[\d+\]", "", text)
+        # ------------------------------------------------------------------------
+
         trace = {
             "plan": "Tool-calling agent (local-first with pre-injected context; web fallback)",
             "steps": [
                 {
                     "tool": getattr(a, "tool", ""),
                     "input": getattr(a, "tool_input", ""),
-                    "observation": (obs[:240] + "…") if isinstance(obs, str) and len(obs) > 240 else obs,
+                    "observation": (str(obs)[:240] + "…") if isinstance(obs, str) and len(str(obs)) > 240 else obs,
                 }
                 for a, obs in steps
             ],
