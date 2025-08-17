@@ -246,9 +246,14 @@ if submitted:
         logger.debug("TRACE:\n%s", json.dumps(trace, indent=2, ensure_ascii=False))
         logger.info("Footnotes payload type: %s", type(footnotes).__name__)
         logger.info("Footnotes payload value: %r", footnotes)
+        # keep refs for evaluation
+        logger.info("FOOTNOTES (eval only): %s", json.dumps(footnotes, ensure_ascii=False))
+        
+        import re
+        visible_answer = re.sub(r"\s*\[\d+\]", "", answer).strip()
 
         # --- chunked streaming by ~5 words (fast + smooth) ---
-        words = answer.split()
+        words = visible_answer.split()
         chunk_size = 5
         accum_words = []
         for i in range(0, len(words), chunk_size):
@@ -261,10 +266,3 @@ if submitted:
             """
             placeholder.markdown(html, unsafe_allow_html=True)
             time.sleep(0.02)
-
-        # --- References (dedicated container; Markdown render) ---
-        refs = st.container()
-        md = render_footnotes_md(footnotes)
-
-        if md.strip():
-            refs.markdown("---\n**References**\n\n" + md, unsafe_allow_html=False)
