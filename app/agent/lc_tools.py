@@ -4,9 +4,9 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from langchain.tools import tool
 from langchain_community.vectorstores import FAISS
-from langchain_community.tools.tavily_search import TavilySearchResults
-from services.vectorstore import load_faiss_or_none
-from services.web_fetch import fetch_and_clean
+from langchain_tavily import TavilySearch
+from app.services.vectorstore import load_faiss_or_none
+from app.services.web_fetch import fetch_and_clean
 
 
 # -----------------------------
@@ -48,7 +48,11 @@ def retrieve_local_tool(query: str, k: int = 6) -> str:
 # -----------------------------
 # This tool emits JSON-like search results (title, url, content) by default.
 # Requires TAVILY_API_KEY in the environment.
-TAVILY = TavilySearchResults(max_results=3)
+TAVILY = TavilySearch(
+    max_results=3,
+    include_answer=True, 
+    include_raw_content=False
+)
 
 
 # -----------------------------
