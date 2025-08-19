@@ -45,7 +45,7 @@ def _make_judge(model: Optional[str] = None) -> ChatOpenAI:
     and avoid long hangs during eval runs.
     """
     return ChatOpenAI(
-        model=model or os.getenv("OPENAI_JUDGE_MODEL", "gpt-4o-mini"),
+        model=model or os.getenv("OPENAI_JUDGE_MODEL", "gpt-4.1-nano"),
         temperature=0,
         timeout=20,      # seconds; prevent stalls
         max_retries=1,   # strict during evals
@@ -181,7 +181,7 @@ def eval_marker_rule(inp: EvalInput) -> Dict[str, Any]:
     return {"name": "citation_markers_rule", "score": round(score, 3), "reason": f"{have}/{len(markers)} markers matched."}
 
 def eval_latency_ms(latency_ms: Optional[float]) -> Dict[str, Any]:
-    """You can pass observed latency (ms) from your app to score perf targets."""
+    """Pass observed latency (ms) to score perf targets."""
     if latency_ms is None:
         return {"name": "latency", "score": None, "reason": "No latency provided."}
     target = 5000  # 5s non-web target you specified
