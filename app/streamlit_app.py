@@ -135,6 +135,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# --- adaptive text color (uses Streamlit theme variables) ---
+st.markdown("""
+<style>
+/* Let Streamlit's theme decide the correct foreground color */
+.answer-text {
+    color: var(--text-color) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ---------- sidebar ----------
 with st.sidebar:
     if headshot_b64:
