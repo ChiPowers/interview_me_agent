@@ -69,7 +69,6 @@ def chivon_eval_adapter(inputs: dict, outputs: dict, reference_outputs: dict, *,
     a = outputs.get("answer") or outputs.get("output") or ""
     ref = (reference_outputs or {}).get("answer") if reference_outputs else None
 
-    # Optional: pull context/footnotes from run.outputs if your app recorded them
     ctx = ""
     footnotes = {}
     try:

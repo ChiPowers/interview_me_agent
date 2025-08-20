@@ -17,7 +17,7 @@ from app.services.vectorstore import load_faiss_or_none  # prefetch local_contex
 
 import threading, random
 from langsmith import Client
-from ..eval.evaluators import EvalInput
+from app.eval.evaluators import EvalInput
 
 # --- Config ---
 MAX_ITER = 6

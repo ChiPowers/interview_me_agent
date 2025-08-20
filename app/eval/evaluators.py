@@ -45,7 +45,7 @@ def _make_judge(model: Optional[str] = None) -> ChatOpenAI:
     and avoid long hangs during eval runs.
     """
     return ChatOpenAI(
-        model=model or os.getenv("OPENAI_JUDGE_MODEL", "gpt-4.1-nano"),
+        model=model or os.getenv("OPENAI_JUDGE_MODEL", "gpt-4o-mini"),
         temperature=0,
         timeout=20,      # seconds; prevent stalls
         max_retries=1,   # strict during evals
