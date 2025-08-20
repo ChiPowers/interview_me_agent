@@ -17,7 +17,7 @@ from app.services.vectorstore import load_faiss_or_none  # prefetch local_contex
 
 import threading, random
 from langsmith import Client
-from eval.evaluators import EvalInput
+from app.eval.evaluators import EvalInput
 
 # --- Config ---
 MAX_ITER = 6
@@ -180,7 +180,7 @@ def _post_feedback_worker(run_id: str, ei: EvalInput, latency_ms: float):
     """Background poster: normalize evaluator outputs and post per-metric feedback."""
     try:
         import json
-        from eval.evaluators import EvalInput, combined_eval_json  # your aggregator
+        from ..eval.evaluators import EvalInput, combined_eval_json  # your aggregator
         raw = combined_eval_json(ei, latency_ms=latency_ms)
 
         # ---- DEBUG (optional) ----

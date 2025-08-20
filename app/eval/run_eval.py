@@ -8,11 +8,19 @@ from uuid import uuid4
 
 from langsmith import Client
 
-LS_ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
-LS_API_KEY = os.getenv("LANGSMITH_API_KEY")
-PROJECT = os.getenv("LANGCHAIN_PROJECT", "interview-agent-bot")
+LANGSMITH_API_KEY = os.getenv("LANGSMITH_EVAL_API_KEY", "")
+LANGCHAIN_ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
+PROJECT = os.getenv("LANGCHAIN_PROJECT", "evaluators")
 
-client = Client(api_key=LS_API_KEY, api_url=LS_ENDPOINT)
+client = Client(api_key=LANGSMITH_API_KEY, api_url=LANGCHAIN_ENDPOINT)
+
+# ------------------------------- Config --------------------------------
+REPO = Path(__file__).resolve().parents[2]
+DATASET_YAML = Path(os.getenv("EVAL_DATASET", REPO / "app"/ "eval" / "qas.yaml"))
+OUT_DIR = REPO / "eval_outputs"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+POST_FEEDBACK = os.getenv("POST_FEEDBACK", "0") in ("1", "true", "yes")
 
 # ---- Minimal, controlled logging before imports that emit warnings ----
 import logging
@@ -29,24 +37,7 @@ from ..agent.lc_controller import LCController
 from .evaluators import EvalInput, default_eval_suite
 from dotenv import load_dotenv
 
-# Optional LangSmith client (only used for feedback posting)
-try:
-    from langsmith import Client
-    LS_AVAILABLE = True
-except Exception:
-    LS_AVAILABLE = False
-
 load_dotenv()
-
-# ------------------------------- Config --------------------------------
-REPO = Path(__file__).resolve().parents[2]
-DATASET_YAML = Path(os.getenv("EVAL_DATASET", REPO / "app"/ "eval" / "qas.yaml"))
-OUT_DIR = REPO / "eval_outputs"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-POST_FEEDBACK = os.getenv("POST_FEEDBACK", "0") in ("1", "true", "yes")
-LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY", "")
-LANGCHAIN_ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
 
 # ----------------------------- Utilities -------------------------------
 def load_golden(path: Path) -> List[Dict[str, Any]]:
@@ -79,7 +70,7 @@ def safe_default_eval_suite(ei: EvalInput, latency_ms: Optional[float]) -> List[
         return [{"name": "eval_error", "score": 0.0, "reason": f"{type(e).__name__}: {e}"}]
 
 def make_langsmith_client() -> Optional[Client]:
-    if not (LS_AVAILABLE and POST_FEEDBACK and LANGSMITH_API_KEY):
+    if not (POST_FEEDBACK and LANGSMITH_API_KEY):
         return None
     try:
         # NOTE: langsmith Client expects api_url in most recent versions
@@ -164,7 +155,7 @@ def main():
         if not run_id:
             try:
                 created = client.create_run(
-                    name="batch-eval",
+                    name="batch-eval-4o-mini",
                     run_type="chain",
                     project_name=PROJECT,
                     inputs={"question": q},

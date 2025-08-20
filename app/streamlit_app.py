@@ -276,3 +276,5 @@ if submitted:
             """
             placeholder.markdown(html, unsafe_allow_html=True)
             time.sleep(0.02)
+
+st.markdown("<div style='margin-bottom: 40px;'></div>", unsafe_allow_html=True)

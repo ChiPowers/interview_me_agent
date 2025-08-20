@@ -12,7 +12,7 @@ from .evaluators import EvalInput, default_eval_suite
 
 # ---- Config (env overrides) ----
 PROJECT = os.getenv("LANGCHAIN_PROJECT", "interview-agent-bot")
-DATASET_NAME = os.getenv("LS_DATASET_NAME", "Interview_Agent_QAS")  # exact dataset name in LangSmith
+DATASET_NAME = os.getenv("LS_DATASET_NAME", "Agent QAS")  # exact dataset name in LangSmith
 EXPERIMENT_PREFIX = os.getenv("LS_EXPERIMENT_PREFIX", "interview-agent")
 EVAL_API_KEY = os.getenv("LANGSMITH_EVAL_API_KEY") or os.getenv("LANGSMITH_API_KEY")
 ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
@@ -51,49 +51,47 @@ def target(inputs: dict) -> dict:
 # at top
 from langsmith.evaluation.evaluator import EvaluationResult
 
+# run_openevals_custom.py (or wherever your adapter lives)
+
 def _coerce_score(v):
     try:
-        if v is None:
-            return None
-        return float(v)
+        return None if v is None else float(v)
     except Exception:
         return None
 
 def chivon_eval_adapter(inputs: dict, outputs: dict, reference_outputs: dict, *, run=None, example=None):
     """
-    Wrap your evaluators.py suite so it returns a list[EvaluationResult],
-    which LangSmith expects.
+    Wrap app.eval.evaluators.default_eval_suite -> list of dicts that LangSmith accepts.
     """
-    from app.eval.evaluators import EvalInput, default_eval_suite  # adjust import if needed
+    from app.eval.evaluators import EvalInput, default_eval_suite
 
     q = inputs.get("question") or inputs.get("input") or ""
     a = outputs.get("answer") or outputs.get("output") or ""
     ref = (reference_outputs or {}).get("answer") if reference_outputs else None
 
-    # You may have stashed context/footnotes in run.outputs or run.extra; fallback to blanks.
     ctx = ""
-    fnotes = {}
+    footnotes = {}
     try:
-        # If your app saved trace/footnotes on the run, surface them:
         extra = (run and getattr(run, "outputs", None)) or {}
         ctx = (extra.get("trace") or {}).get("local_context_preview", "") or ""
-        fnotes = extra.get("footnotes") or {}
+        footnotes = extra.get("footnotes") or {}
     except Exception:
         pass
 
-    ei = EvalInput(question=q, answer=a, context=ctx, footnotes=fnotes, reference=ref)
-    metrics = default_eval_suite(ei, latency_ms=None)  # or pass your latency if you have it
+    ei = EvalInput(question=q, answer=a, context=ctx, footnotes=footnotes, reference=ref)
+    metrics = default_eval_suite(ei, latency_ms=None)
 
-    results: list[EvaluationResult] = []
+    results = []
     for m in metrics:
         key = m.get("name") or "metric"
         score = _coerce_score(m.get("score"))
         comment = m.get("reason") or m.get("comment") or ""
-        # LangSmith requires either score or categorical value. If no score, set a value.
-        if score is not None:
-            results.append(EvaluationResult(key=key, score=score, comment=comment))
+
+        # If no numeric score, provide a categorical value instead
+        if score is None:
+            results.append({"key": key, "value": "n/a", "comment": comment})
         else:
-            results.append(EvaluationResult(key=key, value="n/a", comment=comment))
+            results.append({"key": key, "score": score, "comment": comment})
 
     return results
 
