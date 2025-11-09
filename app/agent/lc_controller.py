@@ -6,7 +6,11 @@ import re
 import traceback
 
 from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+try:  # langchain>=0.2 removed AgentExecutor from the package root
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
+except ImportError:  # langchain>=0.3
+    from langchain.agents import create_tool_calling_agent
+    from langchain.agents.agent import AgentExecutor
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.callbacks.base import BaseCallbackHandler
