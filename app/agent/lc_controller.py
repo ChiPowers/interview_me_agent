@@ -21,19 +21,6 @@ def _import_attr(attr: str, modules: list[str]):
     raise ImportError(f"Cannot import {attr} from candidates: {modules}")
 
 
-<<<<<<< HEAD
-AgentExecutor = _import_attr("AgentExecutor", [
-    "langchain.agents",
-    "langchain.agents.agent",
-    "langchain.agents.agent_executor",
-])
-create_tool_calling_agent = _import_attr("create_tool_calling_agent", [
-    "langchain.agents",
-    "langchain.agents.tool_calling",
-    "langchain.agents.tool_calling.agent",
-    "langchain.agents.tool_calling.core",
-])
-=======
 def _import_first_available(attrs: list[str], modules: list[str]):
     last_exc = None
     for attr in attrs:
@@ -66,7 +53,6 @@ create_tool_calling_agent = _import_first_available(
         "langchain.agents.openai_tools",
     ],
 )
->>>>>>> 5654094 (update packages and upgrade architecture)
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.callbacks.base import BaseCallbackHandler
