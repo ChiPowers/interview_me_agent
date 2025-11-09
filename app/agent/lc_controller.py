@@ -6,11 +6,33 @@ import re
 import traceback
 
 from langchain_openai import ChatOpenAI
-try:  # langchain>=0.2 removed AgentExecutor from the package root
-    from langchain.agents import AgentExecutor, create_tool_calling_agent
-except ImportError:  # langchain>=0.3
-    from langchain.agents import create_tool_calling_agent
-    from langchain.agents.agent import AgentExecutor
+from importlib import import_module
+
+
+def _import_attr(attr: str, modules: list[str]):
+    """Try several module paths until the attribute is found (LangChain reorganizes often)."""
+    for mod in modules:
+        try:
+            module = import_module(mod)
+        except ImportError:
+            continue
+        obj = getattr(module, attr, None)
+        if obj is not None:
+            return obj
+    raise ImportError(f"Cannot import {attr} from candidates: {modules}")
+
+
+AgentExecutor = _import_attr("AgentExecutor", [
+    "langchain.agents",
+    "langchain.agents.agent",
+    "langchain.agents.agent_executor",
+])
+create_tool_calling_agent = _import_attr("create_tool_calling_agent", [
+    "langchain.agents",
+    "langchain.agents.tool_calling",
+    "langchain.agents.tool_calling.agent",
+    "langchain.agents.tool_calling.core",
+])
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.callbacks.base import BaseCallbackHandler
