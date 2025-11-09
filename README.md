@@ -25,3 +25,8 @@ A conversational AI agent app that lets people ask questions about my work exper
 - Local citations appear as `local • <file> p.<n>`; web citations show real URLs.
 - Session memory: last 8 turns.
 - LangSmith tracing enabled with `LANGSMITH_API_KEY`.
+
+## Controllers & Testing
+- The default backend is the LangGraph controller (local-first with web fallback). Set `AGENT_BACKEND=langchain` to fall back to the legacy LangChain agent if needed.
+- Rebuild the FAISS index before first run via the UI or `python -m app.services.ingest_index`.
+- Smoke-test the LangGraph pipeline directly: `python -m app.agent.lg_controller "Tell me about your work on NLP"` (requires `.env` with OpenAI/Tavily keys).

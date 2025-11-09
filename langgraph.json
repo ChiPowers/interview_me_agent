@@ -1,0 +1,22 @@
+{
+  "graphs": {
+    "default": "app.agent.graph_controller:build_graph"
+  },
+  "dependencies": [
+    "app", 
+    "agent",
+    "services",
+    "eval",
+    "langchain",
+    "langchain-openai",
+    "langgraph",
+    "langsmith",
+    "faiss-cpu",
+    "pypdf",
+    "tavily-python"
+  ],
+  "env": {
+    "LANGCHAIN_TRACING_V2": "true",
+    "LANGCHAIN_PROJECT": "interview-agent-bot"
+  }
+}

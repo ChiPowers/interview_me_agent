@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from services.ingest_index import ensure_index  # auto-build/load on boot
 from agent.lc_controller import LCController
+from agent.lg_controller import LGController
 
 import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
@@ -161,8 +162,22 @@ def _ensure_index_ready():
 _ensure_index_ready()
 
 # ---------- controller & state ----------
+def _init_controller():
+    backend = os.getenv("AGENT_BACKEND", "langgraph").lower()
+    if backend == "langchain":
+        logger.info("Using legacy LangChain controller (AGENT_BACKEND=langchain).")
+        return LCController()
+    try:
+        logger.info("Using LangGraph controller (AGENT_BACKEND=%s).", backend)
+        return LGController()
+    except Exception as exc:
+        logger.exception("LangGraph controller failed to initialize, falling back to LangChain: %s", exc)
+        st.warning("LangGraph backend failed to initialize; falling back to legacy agent. Check logs for details.")
+        return LCController()
+
+
 if "controller" not in st.session_state:
-    st.session_state.controller = LCController()
+    st.session_state.controller = _init_controller()
 
 # ---------- header ----------
 st.markdown(
