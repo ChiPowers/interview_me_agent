@@ -21,7 +21,6 @@ import logging
 from pathlib import Path
 import argparse
 from pathlib import Path
-from .settings import DATA_RAW_DIR  # or .settings if you use relative
 
 # --------- PATH PATCH (so direct script & module both work) ----------
 THIS_FILE   = Path(__file__).resolve()                 # .../app/services/ingest_index.py
