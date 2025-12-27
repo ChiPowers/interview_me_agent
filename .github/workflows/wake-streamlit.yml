@@ -2,20 +2,33 @@ name: Wake Streamlit App
 
 on:
   schedule:
-    # GitHub Actions schedules run in UTC.
-    # Example below: 15:00 UTC = 08:00 America/Denver (MST, UTC-7) during winter.
-    - cron: "0 11 * * *"
-    - cron: "0 23 * * *"
+    # GitHub schedules are UTC.
+    # Example: 15:00 UTC = 08:00 America/Denver during winter (MST, UTC-7).
+    - cron: "0 */4 * * *"
   workflow_dispatch: {}
 
 jobs:
   wake:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Streamlit app
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
         run: |
-          set -e
-          URL="https://interview-me-agent.streamlit.app"
-          echo "Waking: $URL"
-          curl -fsS --max-time 30 "$URL" >/dev/null
-          echo "OK"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Install Chrome + chromedriver in the runner
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Run wake script
+        env:
+          STREAMLIT_APP_URL: "https://interview-me-agent.streamlit.app/"
+        run: |
+          python wake_streamlit.py
