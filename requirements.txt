@@ -31,3 +31,4 @@ lxml>=5.2
 # Utils
 pyyaml>=6.0
 rapidfuzz>=3.9
+selenium
