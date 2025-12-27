@@ -1,0 +1,20 @@
+name: Wake Streamlit App
+
+on:
+  schedule:
+    # GitHub Actions schedules run in UTC.
+    # Example below: 15:00 UTC = 08:00 America/Denver (MST, UTC-7) during winter.
+    - cron: "0 15 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Streamlit app
+        run: |
+          set -e
+          URL="https://interview-me-agent.streamlit.app"
+          echo "Waking: $URL"
+          curl -fsS --max-time 30 "$URL" >/dev/null
+          echo "OK"
