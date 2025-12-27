@@ -4,7 +4,8 @@ on:
   schedule:
     # GitHub Actions schedules run in UTC.
     # Example below: 15:00 UTC = 08:00 America/Denver (MST, UTC-7) during winter.
-    - cron: "0 15 * * *"
+    - cron: "0 11 * * *"
+    - cron: "0 23 * * *"
   workflow_dispatch: {}
 
 jobs:
