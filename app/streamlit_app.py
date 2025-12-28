@@ -72,7 +72,7 @@ def _path_if_exists(dirpath: Path, name: str) -> Path | None:
 # Try to find each image under the chosen STATIC_DIR
 LOGO_FILE     = _path_if_exists(STATIC_DIR, "logotat.png")
 HEADSHOT_FILE = _path_if_exists(STATIC_DIR, "headshot.png")
-CHATSHOT_FILE = _path_if_exists(STATIC_DIR, "cp_face.png")
+CHATSHOT_FILE = _path_if_exists(STATIC_DIR, "logo_tat.png")
 
 logo_b64     = _read_image_b64(LOGO_FILE)     if LOGO_FILE     else ""
 headshot_b64 = _read_image_b64(HEADSHOT_FILE) if HEADSHOT_FILE else ""
