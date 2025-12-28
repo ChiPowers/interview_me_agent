@@ -70,9 +70,13 @@ def _path_if_exists(dirpath: Path, name: str) -> Path | None:
     return p if p.exists() else None
 
 # Try to find each image under the chosen STATIC_DIR
-LOGO_FILE     = _path_if_exists(STATIC_DIR, "logotat.png")
+LOGO_FILE     = _path_if_exists(STATIC_DIR, "logo_tat.png")
 HEADSHOT_FILE = _path_if_exists(STATIC_DIR, "headshot.png")
-CHATSHOT_FILE = _path_if_exists(STATIC_DIR, "logo_tat.png")
+# Allow multiple names so deployments stay resilient
+CHATSHOT_FILE = (
+    _path_if_exists(STATIC_DIR, "logo_tat.png")
+    or _path_if_exists(STATIC_DIR, "cp_face.png")
+)
 
 logo_b64     = _read_image_b64(LOGO_FILE)     if LOGO_FILE     else ""
 headshot_b64 = _read_image_b64(HEADSHOT_FILE) if HEADSHOT_FILE else ""
@@ -290,6 +294,6 @@ if submitted:
             html_parts.append("</div>")
             html = "".join(html_parts)
             placeholder.markdown(html, unsafe_allow_html=True)
-            time.sleep(0.02)
+            time.sleep(0.08)
 
 st.markdown("<div style='margin-bottom: 40px;'></div>", unsafe_allow_html=True)
