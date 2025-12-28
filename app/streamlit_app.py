@@ -70,11 +70,11 @@ def _path_if_exists(dirpath: Path, name: str) -> Path | None:
     return p if p.exists() else None
 
 # Try to find each image under the chosen STATIC_DIR
-LOGO_FILE     = _path_if_exists(STATIC_DIR, "logo_tat.png")
+LOGO_FILE     = _path_if_exists(STATIC_DIR, "logotat.png")
 HEADSHOT_FILE = _path_if_exists(STATIC_DIR, "headshot.png")
 # Allow multiple names so deployments stay resilient
 CHATSHOT_FILE = (
-    _path_if_exists(STATIC_DIR, "logo_tat.png")
+    _path_if_exists(STATIC_DIR, "logotat.png")
     or _path_if_exists(STATIC_DIR, "cp_face.png")
 )
 
