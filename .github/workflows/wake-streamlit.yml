@@ -2,9 +2,7 @@ name: Wake Streamlit App
 
 on:
   schedule:
-    # GitHub schedules are UTC.
-    # Example: 15:00 UTC = 08:00 America/Denver during winter (MST, UTC-7).
-    - cron: "0 */4 * * *"
+    - cron: "0 */4 * * *"  # every 4 hours (UTC)
   workflow_dispatch: {}
 
 jobs:
@@ -23,12 +21,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Install Chrome + chromedriver in the runner
       - name: Set up Chrome
         uses: browser-actions/setup-chrome@v1
 
       - name: Run wake script
         env:
           STREAMLIT_APP_URL: "https://interview-me-agent.streamlit.app/"
+          ARTIFACT_DIR: "wake_artifacts"
         run: |
           python wake_streamlit.py
+
+      - name: Upload wake artifacts (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wake-artifacts
+          path: wake_artifacts
+          if-no-files-found: ignore
