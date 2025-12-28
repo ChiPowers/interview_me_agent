@@ -283,12 +283,12 @@ if submitted:
         accum_words = []
         for i in range(0, len(words), chunk_size):
             accum_words.extend(words[i:i+chunk_size])
-            html = (
-                '<div class="answer-container">'
-                f'{f"<img src=\\"data:image/png;base64,{chatshot_b64}\\" class=\\"answer-headshot\\">" if chatshot_b64 else ""}'
-                f'<div class="answer-text">{" ".join(accum_words)}</div>'
-                "</div>"
-            )
+            html_parts = ['<div class="answer-container">']
+            if chatshot_b64:
+                html_parts.append(f'<img src="data:image/png;base64,{chatshot_b64}" class="answer-headshot">')
+            html_parts.append(f'<div class="answer-text">{" ".join(accum_words)}</div>')
+            html_parts.append("</div>")
+            html = "".join(html_parts)
             placeholder.markdown(html, unsafe_allow_html=True)
             time.sleep(0.02)
 
