@@ -15,6 +15,9 @@ if not STREAMLIT_URL:
     print("ERROR: STREAMLIT_APP_URL env var is required")
     sys.exit(2)
 
+# Text expected when the real app is rendered (h1 by default, override via APP_SENTINEL_TEXT)
+APP_SENTINEL_TEXT = os.environ.get("APP_SENTINEL_TEXT", "Interview Chivon Powers").strip().lower()
+
 # The wake button text Streamlit shows when asleep
 WAKE_BUTTON_XPATH = "//button[contains(., 'Yes, get this app back up')]"
 
@@ -47,6 +50,28 @@ def save_artifacts(driver: webdriver.Chrome, prefix: str) -> None:
         print(f"Saved HTML: {html_path}")
     except Exception as e:
         print(f"Could not save HTML: {e}")
+
+
+def has_wake_button(driver: webdriver.Chrome) -> bool:
+    try:
+        return bool(driver.find_elements(By.XPATH, WAKE_BUTTON_XPATH))
+    except Exception:
+        return False
+
+
+def wait_for_app_ready(driver: webdriver.Chrome, timeout_s: int) -> bool:
+    """
+    Wait for Streamlit container, app-specific sentinel text, and absence of the wake button.
+    Prevents false positives on the generic sleep page.
+    """
+    end = time.time() + timeout_s
+    while time.time() < end:
+        if wait_for_awake(driver, timeout_s=3):
+            sentinel_ok = (not APP_SENTINEL_TEXT) or (APP_SENTINEL_TEXT in driver.page_source.lower())
+            if sentinel_ok and not has_wake_button(driver):
+                return True
+        time.sleep(2)
+    return False
 
 
 def wait_for_awake(driver: webdriver.Chrome, timeout_s: int) -> bool:
@@ -83,8 +108,8 @@ def main() -> None:
         driver.get(STREAMLIT_URL)
 
         # First, see if the app is already awake.
-        if wait_for_awake(driver, timeout_s=25):
-            print("✅ App appears awake (Streamlit container detected).")
+        if wait_for_app_ready(driver, timeout_s=25):
+            print("✅ App appears awake (container + sentinel detected).")
             return
 
         # If not awake yet, try clicking the wake button if present.
@@ -106,8 +131,8 @@ def main() -> None:
         # After click: give it a moment and then wait for the app to actually render.
         time.sleep(2)
 
-        if wait_for_awake(driver, timeout_s=120):
-            print("✅ Wake succeeded (Streamlit container detected after click).")
+        if wait_for_app_ready(driver, timeout_s=120):
+            print("✅ Wake succeeded (container + sentinel detected after click).")
             return
 
         # If we reach here, click happened but app still didn't render.
