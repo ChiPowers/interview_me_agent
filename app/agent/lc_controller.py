@@ -60,7 +60,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 from .lc_prompts import SYSTEM
 from .lc_tools import retrieve_local_tool, TAVILY, fetch_url_tool
 from .lg_utils import (
-    local_context_from_faiss,
+    multiquery_local_search,
     compose_from_observations,
     build_footnotes,
 )
@@ -169,8 +169,9 @@ class LCController:
                 "trace": {"init_trace": self.init_error or "No traceback."},
             }
 
-        # Pre-inject local context
-        local_ctx = local_context_from_faiss(question, k=6)
+        # Pre-inject local context using multi-query retrieval for better recall
+        mq = multiquery_local_search(question, rewrites=3, k_per_query=3, top_k=6)
+        local_ctx = mq.get("context", "[local] No results")
 
         # Capture run_id from this invocation
         catcher = _RunIdCatcher()
@@ -181,12 +182,15 @@ class LCController:
 
         text = (out.get("output") or "").strip()
         steps = out.get("intermediate_steps", [])
+        pre_steps = []
+        for ev in mq.get("events", []):
+            pre_steps.append((ev.get("tool", "tool"), ev.get("observation", "")))
 
         # Fallback compose if agent halted
         if not text or "Agent stopped" in text:
             text = compose_from_observations(question, steps)
 
-        footnotes_payload = build_footnotes(steps)
+        footnotes_payload = build_footnotes(pre_steps + steps)
         run_id_str = str(catcher.top_run_id) if catcher.top_run_id else None
 
         trace = {
@@ -202,6 +206,8 @@ class LCController:
             "local_context_preview": local_ctx[:800] if isinstance(local_ctx, str) else str(local_ctx)[:800],
             "run_id": run_id_str,
         }
+        if mq.get("rewrites"):
+            trace["local_rewrites"] = mq["rewrites"]
         
         # compute latency if you have it; or pass 0.0
         latency_ms = 0.0

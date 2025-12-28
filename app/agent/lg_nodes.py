@@ -17,6 +17,7 @@ from .lg_utils import (
     should_use_web_judge,
     compose_answer_with_policy,
     footnotes_from_events,
+    multiquery_local_search,
 )
 from .lc_tools import retrieve_local_tool, TAVILY, fetch_url_tool
 
@@ -69,28 +70,25 @@ def route_after_decision(state: AgentState) -> str:
 
 
 def retrieve_local_pass(state: AgentState) -> AgentState:
-    """Call the FAISS-backed retrieval tool and record its output."""
+    """Call the FAISS-backed retrieval tool with multi-query fan-out and record outputs."""
     question = state.get("question") or state.get("input") or ""
-    k = 6
-    try:
-        result = retrieve_local_tool.invoke({"query": question, "k": k})
-    except Exception as exc:  # pragma: no cover - defensive guard
-        result = f"[retrieve_local] error: {exc}"
-        error = str(exc)
-    else:
-        error = None
 
-    event: ToolEvent = {
-        "tool": "retrieve_local",
-        "input": {"query": question, "k": k},
-        "observation": result,
-        "error": error,
-    }
+    mq = multiquery_local_search(question, rewrites=3, k_per_query=3, top_k=6)
+
+    events = list(state.get("tool_events", []))
+    if mq.get("rewrites"):
+        events.append({
+            "tool": "rewrite_queries",
+            "input": {"question": question, "count": len(mq["rewrites"])},
+            "observation": mq["rewrites"],
+        })
+    events.extend(mq.get("events", []))
+
     out = dict(state)
-    events = list(out.get("tool_events", []))
-    events.append(event)
     out["tool_events"] = events
-    out["local_retrieval"] = result
+    out["local_retrieval"] = mq.get("context", "")
+    out.setdefault("local_context", mq.get("context", ""))
+    out["local_rewrites"] = mq.get("rewrites", [])
     return out
 
 

@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from langchain.tools import tool
-from langchain_community.vectorstores import FAISS
 from langchain_tavily import TavilySearch
-from app.services.vectorstore import load_faiss_or_none
 from app.services.web_fetch import fetch_and_clean
+from app.services.vectorstore import load_faiss_or_none
+from app.agent.lg_utils import multiquery_local_search
 
 
 # -----------------------------
@@ -29,18 +29,19 @@ def retrieve_local_tool(query: str, k: int = 6) -> str:
     Use this tool first. If it returns "[retrieve_local] No results" or clearly irrelevant content,
     consider a web search as fallback.
     """
-    vs: Optional[FAISS] = load_faiss_or_none()
+    vs = load_faiss_or_none()
     if vs is None:
         return "[retrieve_local] No index loaded. Click (Re)Build Index in the app."
-    try:
-        docs = vs.similarity_search(query, k=k)
-    except Exception as e:
-        return f"[retrieve_local] error: {e}"
-    blocks: List[str] = []
-    for d in docs:
-        label = d.metadata.get("label") or d.metadata.get("source", "local.pdf")
-        blocks.append(f"{label}\n{d.page_content}")
-    return "\n\n---\n\n".join(blocks) if blocks else "[retrieve_local] No results"
+
+    # Fan-out across rewrites for better recall, then merge results.
+    mq = multiquery_local_search(query, rewrites=3, k_per_query=max(2, k // 2), top_k=k)
+
+    context = mq.get("context", "[retrieve_local] No results")
+    rewrites = mq.get("rewrites") or []
+    if rewrites:
+        header = "Rewrites: " + " | ".join(rewrites[:5])
+        return header + "\n\n" + context
+    return context
 
 
 # -----------------------------
