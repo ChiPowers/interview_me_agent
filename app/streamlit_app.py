@@ -244,7 +244,7 @@ def render_footnotes_md(footnotes) -> str:
 with st.form(key="qa_form", clear_on_submit=True):
     question = st.text_input(
         label="Enter your interview question:",
-        placeholder="e.g., Tell me about a time you solved a tough problem",
+        placeholder="How has your experience prepared you for a role in AI?",
         key="user_question",
     )
     submitted = st.form_submit_button("Ask the Question")

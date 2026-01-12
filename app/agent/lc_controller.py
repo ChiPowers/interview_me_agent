@@ -5,6 +5,7 @@ import os
 import traceback
 
 from langchain_openai import ChatOpenAI
+from langchain import hub
 from importlib import import_module
 
 
@@ -54,7 +55,9 @@ create_tool_calling_agent = _import_first_available(
     ],
 )
 from langchain.memory import ConversationBufferWindowMemory
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, BasePromptTemplate
+from langchain_core.runnables import RunnableSequence, RunnableBinding
+from langchain_core.language_models import BaseLanguageModel
 from langchain.callbacks.base import BaseCallbackHandler
 
 from .lc_prompts import SYSTEM
@@ -74,6 +77,7 @@ from .eval_utils import (
 MAX_ITER = 6
 DEFAULT_LLM = os.getenv("OPENAI_MODEL", "gpt-4.1-nano")
 COMPOSER_LLM = os.getenv("OPENAI_COMPOSER_MODEL", DEFAULT_LLM)
+HUB_PROMPT_NAME = os.getenv("LC_HUB_PROMPT", "interview_agent_prompt")
 
 # Optional: quick sanity log
 if POST_FEEDBACK_ENABLED:
@@ -91,7 +95,7 @@ POLICY = (
     "3) Add footnote markers [1], [2]. Cite local labels like 'local • <file> p.<n>' and real URLs for web.\n"
 )
 
-PROMPT = ChatPromptTemplate.from_messages(
+FALLBACK_PROMPT = ChatPromptTemplate.from_messages(
     [
         ("system", SYSTEM + "\n" + POLICY),
         MessagesPlaceholder("chat_history"),
@@ -100,6 +104,54 @@ PROMPT = ChatPromptTemplate.from_messages(
         MessagesPlaceholder("agent_scratchpad"),
     ]
 )
+
+def _resolve_prompt_and_llm(prompt_obj: Any) -> Tuple[BasePromptTemplate, Optional[BaseLanguageModel]]:
+    prompt = None
+    llm = None
+
+    if isinstance(prompt_obj, BasePromptTemplate):
+        prompt = prompt_obj
+    elif isinstance(prompt_obj, RunnableSequence):
+        for step in prompt_obj.steps:
+            if prompt is None and isinstance(step, BasePromptTemplate):
+                prompt = step
+            if isinstance(step, BaseLanguageModel):
+                llm = step
+            elif isinstance(step, RunnableBinding) and isinstance(step.bound, BaseLanguageModel):
+                llm = step.bound.bind(**step.kwargs)
+    else:
+        first = getattr(prompt_obj, "first", None)
+        last = getattr(prompt_obj, "last", None)
+        if isinstance(first, BasePromptTemplate):
+            prompt = first
+        if isinstance(last, BaseLanguageModel):
+            llm = last
+
+    return (prompt or FALLBACK_PROMPT), llm
+
+def _llm_from_prompt_metadata(prompt: BasePromptTemplate) -> Optional[BaseLanguageModel]:
+    metadata = getattr(prompt, "metadata", None) or {}
+    model = metadata.get("model") or metadata.get("model_name") or metadata.get("model_id")
+    temperature = metadata.get("temperature")
+
+    if model is None and temperature is None:
+        return None
+
+    kwargs: Dict[str, Any] = {}
+    if model:
+        kwargs["model"] = model
+    if temperature is not None:
+        kwargs["temperature"] = float(temperature)
+    return ChatOpenAI(**kwargs)
+
+def _load_hub_prompt_and_llm() -> Tuple[BasePromptTemplate, Optional[BaseLanguageModel]]:
+    try:
+        prompt_obj = hub.pull(HUB_PROMPT_NAME, include_model=True)
+        prompt, llm = _resolve_prompt_and_llm(prompt_obj)
+        return prompt, (llm or _llm_from_prompt_metadata(prompt))
+    except Exception as exc:
+        print(f"[prompt] hub pull failed for {HUB_PROMPT_NAME}: {exc}")
+        return FALLBACK_PROMPT, None
 
 
 # ---------- Run ID capture ----------
@@ -119,9 +171,10 @@ class _RunIdCatcher(BaseCallbackHandler):
 
 # ---------- Agent factory ----------
 def make_executor() -> AgentExecutor:
-    llm = ChatOpenAI(model=DEFAULT_LLM, temperature=0.2)
+    prompt, prompt_llm = _load_hub_prompt_and_llm()
+    llm = prompt_llm or ChatOpenAI(model=DEFAULT_LLM, temperature=0.2)
     tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
-    agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=PROMPT)
+    agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
 
     memory = ConversationBufferWindowMemory(
         k=8,
