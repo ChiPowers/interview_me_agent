@@ -71,7 +71,7 @@ def _load_pdfs(pdf_dir: Path) -> list:
 
 
 def _split_and_label(docs: list) -> list:
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=100, chunk_overlap=20)
     chunks = splitter.split_documents(docs)
     # Add friendly labels (used in citations)
     for c in chunks:
