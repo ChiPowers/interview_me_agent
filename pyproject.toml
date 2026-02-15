@@ -1,0 +1,33 @@
+[project]
+name = "interview-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "faiss-cpu>=1.8.0",
+    "langchain>=1.2.0,<2.0.0",
+    "langchain-community>=0.4.0,<1.0.0",
+    "langchain-openai>=1.1.0,<2.0.0",
+    "langchain-tavily>=0.2.0,<1.0.0",
+    "langchain-text-splitters>=1.1.0,<2.0.0",
+    "langgraph>=1.0.0,<2.0.0",
+    "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
+    "langgraph-cli>=0.4.11",
+    "langgraph-sdk>=0.3.0,<1.0.0",
+    "langsmith>=0.1.94",
+    "lxml>=5.2",
+    "numpy>=1.26",
+    "openai>=1.40",
+    "pillow>=10.4",
+    "pypdf>=4.3",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "rapidfuzz>=3.9",
+    "requests>=2.32",
+    "selenium>=4.39.0",
+    "streamlit>=1.36",
+    "tavily-python>=0.3.5",
+    "trafilatura>=1.6",
+]

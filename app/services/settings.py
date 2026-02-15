@@ -16,4 +16,4 @@ FAISS_PATH    = INDEX_DIR / "faiss"
 DATA_RAW_DIR = os.path.join(APP_DIR, "data", "raw")
 # DATA_RAW_DIR = os.path.abspath(DATA_RAW_DIR)
 EMBED_MODEL   = os.getenv("EMBED_MODEL", "text-embedding-3-large")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-nano")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")

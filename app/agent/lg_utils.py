@@ -39,7 +39,7 @@ def rewrite_queries(question: str, n: int = 3) -> List[str]:
     if n <= 0:
         return []
     llm = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07"),
         temperature=0.3,
         max_tokens=120,
     )
@@ -216,7 +216,7 @@ def compose_from_observations(question: str, steps: List[Tuple[Any, Any]]) -> st
             break
     urls = list(dict.fromkeys(urls))[:3]
 
-    llm = ChatOpenAI(model=os.getenv("OPENAI_COMPOSER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_COMPOSER_MODEL", os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")), temperature=0.2)
     compose = ChatPromptTemplate.from_messages(
         [
             (
@@ -267,7 +267,7 @@ def compose_answer_with_policy(
         ("system", SYSTEM + "\n" + policy),
         ("human", "Question: {question}\n\nContext:\n{context}"),
     ])
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07"), temperature=0.2)
     raw_answer = llm.invoke(prompt.format_messages(question=question, context=combined_context)).content.strip()
     return guard_answer_with_evidence(question, raw_answer, combined_context)
 
@@ -281,7 +281,7 @@ def guard_answer_with_evidence(question: str, answer: str, context: str) -> str:
         return answer
 
     checker = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07"),
         temperature=0,
         max_tokens=160,
     )
@@ -357,7 +357,7 @@ def analyze_local_context(question: str, local_ctx: str) -> Dict[str, Any]:
 def should_use_web_judge(question: str, local_ctx: str) -> Dict[str, Any]:
     """Tiny LLM judge to double-check the routing heuristic."""
     judge = ChatOpenAI(
-        model=os.getenv("OPENAI_ROUTE_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
+        model=os.getenv("OPENAI_ROUTE_MODEL", os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")),
         temperature=0,
         max_tokens=32,
         timeout=8,
