@@ -1,3 +1,9 @@
+"""
+LGController — LangChain v1 ``create_agent`` wrapper.
+
+Provides the same ``respond(question) → {answer, footnotes, trace}`` API
+expected by the Streamlit UI and evaluation pipeline.
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +16,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .lg_graph import build_graph
-from .lg_state import AgentState
 from .lg_utils import footnotes_from_events
 from .eval_utils import maybe_post_feedback_async, POST_FEEDBACK_ENABLED
 
@@ -24,11 +29,11 @@ def _default_checkpoint_path() -> str:
 
 
 class LGController:
-    """LangGraph-based controller that mirrors LCController.respond() output."""
+    """LangGraph-based controller using create_agent with middleware."""
 
     def __init__(self, checkpoint_path: Optional[str] = None, thread_id: Optional[str] = None):
         self.checkpoint_path = checkpoint_path or _default_checkpoint_path()
-        self.graph: Any = build_graph(checkpoint_path=self.checkpoint_path)
+        self.agent = build_graph(checkpoint_path=self.checkpoint_path)
         self.thread_id = thread_id or os.getenv("LANGGRAPH_THREAD_ID") or str(uuid.uuid4())
         self.turn_index = 0
         self._last_trace = None
@@ -37,19 +42,18 @@ class LGController:
     def respond(self, question: str) -> Dict[str, Any]:
         self.turn_index += 1
         logger.info("[LG] Q%d: %s", self.turn_index, question)
-        state: AgentState = {
-            "thread_id": self.thread_id,
-            "turn_index": self.turn_index,
-            "question": question,
-            "input": question,
+
+        # create_agent uses messages-based state
+        input_state = {
+            "messages": [{"role": "user", "content": question}],
         }
         config = {"configurable": {"thread_id": self.thread_id}}
 
         start = time.time()
         try:
-            result = self.graph.invoke(state, config=config)
+            result = self.agent.invoke(input_state, config=config)
         except Exception as exc:
-            logger.exception("[LG] Graph invocation failed: %s", exc)
+            logger.exception("[LG] Agent invocation failed: %s", exc)
             return {
                 "answer": f"Error: {exc}",
                 "footnotes": {},
@@ -57,17 +61,39 @@ class LGController:
             }
         latency_ms = (time.time() - start) * 1000.0
 
-        answer = (result.get("answer") or result.get("output") or "").strip()
-        events = result.get("tool_events", [])
-        footnotes = result.get("footnotes") or footnotes_from_events(events)
+        # Extract answer from last AI message
+        messages = result.get("messages", [])
+        answer = ""
+        for msg in reversed(messages):
+            content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else "")
+            msg_type = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else "")
+            if msg_type in ("ai", "assistant") and content:
+                answer = content.strip()
+                break
+
+        # Extract footnotes and trace from state (populated by middleware)
+        footnotes = result.get("footnotes") or {}
+        if not footnotes:
+            # Fallback: build from tool messages
+            tool_events = result.get("tool_events", [])
+            if not tool_events:
+                tool_events = []
+                for msg in messages:
+                    msg_type = getattr(msg, "type", None)
+                    if msg_type == "tool":
+                        tool_events.append({
+                            "tool": getattr(msg, "name", "tool"),
+                            "input": {},
+                            "observation": getattr(msg, "content", "") or "",
+                        })
+            footnotes = footnotes_from_events(tool_events)
 
         trace = (result.get("trace") or {}).copy()
-        trace.setdefault("plan", "LangGraph RAG (local-first with web fallback)")
+        trace.setdefault("plan", "create_agent RAG (local-first with web fallback)")
         trace.setdefault("routing", result.get("routing"))
-        trace.setdefault("tool_events", events)
         trace.setdefault("local_context_preview", (result.get("local_context") or "")[:800])
         trace["run_id"] = trace.get("run_id") or self.thread_id
-        trace["controller"] = "langgraph"
+        trace["controller"] = "create_agent_v1"
         trace["latency_ms"] = latency_ms
         self._last_trace = trace
 
@@ -75,13 +101,16 @@ class LGController:
             "[LG] Answered in %.1f ms (needs_web=%s, tools=%d)",
             latency_ms,
             bool(result.get("needs_web")),
-            len(events),
+            len(trace.get("tool_events", [])),
         )
         logger.debug("[LG] Footnotes: %s", json.dumps(footnotes, ensure_ascii=False))
 
         if POST_FEEDBACK_ENABLED:
             ctx = trace.get("local_context_preview", "")
-            maybe_post_feedback_async(trace.get("run_id"), question, answer, ctx, footnotes, reference=None, latency_ms=latency_ms)
+            maybe_post_feedback_async(
+                trace.get("run_id"), question, answer, ctx,
+                footnotes, reference=None, latency_ms=latency_ms,
+            )
 
         return {
             "answer": answer,

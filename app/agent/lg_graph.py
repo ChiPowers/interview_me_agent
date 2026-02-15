@@ -1,66 +1,61 @@
 """
-LangGraph assembly helpers.
+Interview Agent graph builder — LangChain v1 ``create_agent`` with middleware.
 
-Phase 2 focuses on defining the state schema and creating a modular node layout so we can
-drop in the modern LangGraph controller without touching the Streamlit surface area.
+Replaces the hand-rolled StateGraph with a single ``create_agent()`` call.
+All RAG routing, hallucination guarding, and trace collection are handled
+by middleware hooks defined in ``middleware.py``.
 """
 from __future__ import annotations
 
-from typing import Optional
+import os
 import sqlite3
+from typing import Optional
 
-from langgraph.graph import StateGraph, END
+from langchain.agents import create_agent
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from .lg_state import AgentState
-from . import lg_nodes
+from .lc_prompts import SYSTEM
+from .lc_tools import retrieve_local_tool, TAVILY, fetch_url_tool
+from .lg_state import InterviewState
+from .middleware import get_middleware
+
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
+
+# Answer-policy additions appended to the system prompt
+POLICY = (
+    "\nPolicy:\n"
+    "1) ALWAYS call the retrieve_local tool FIRST before answering any question. "
+    "You MUST search local documents before responding — never answer from your own knowledge alone.\n"
+    "2) If retrieve_local returns insufficient context, then use tavily_search, "
+    "then optionally fetch_url for more detail.\n"
+    "3) Keep answers ≤ 3 sentences (≤ 90 words), first person, professional only.\n"
+    "4) Add footnote markers [1], [2]. Cite local labels like "
+    "'local • <file> p.<n>' and real URLs for web.\n"
+)
 
 
 def build_graph(checkpoint_path: Optional[str] = None):
     """
-    Return a compiled LangGraph pipeline.
+    Return a compiled agent graph using ``create_agent``.
 
-    Nodes are currently lightweight wrappers around the existing LangChain logic.
-    Later phases will attach richer tool-calling and evaluation hooks.
+    The agent uses the ReAct loop (model → tool → observation → repeat)
+    with middleware controlling RAG routing, hallucination guard, and
+    trace/footnote collection.
     """
-    graph = StateGraph(AgentState)
-
-    graph.add_node("prepare_context", lg_nodes.prepare_local_context)
-    graph.add_node("decide_retrieval", lg_nodes.decide_retrieval_strategy)
-    graph.add_node("retrieve_local", lg_nodes.retrieve_local_pass)
-    graph.add_node("maybe_web", lg_nodes.maybe_web_search_pass)
-    graph.add_node("compose_answer", lg_nodes.compose_answer_pass)
-    graph.add_node("finalize", lg_nodes.finalize_pass)
-
-    graph.set_entry_point("prepare_context")
-    graph.add_edge("prepare_context", "decide_retrieval")
-
-    graph.add_conditional_edges(
-        "decide_retrieval",
-        lg_nodes.route_after_decision,
-        {
-            "local_only": "retrieve_local",
-            "needs_web": "retrieve_local",
-            "skip_retrieval": "compose_answer",
-        },
-    )
-
-    # After local retrieval, optionally branch into web search (when flagged)
-    graph.add_conditional_edges(
-        "retrieve_local",
-        lg_nodes.route_after_local_pass,
-        {
-            "web": "maybe_web",
-            "no_web": "compose_answer",
-        },
-    )
-
-    graph.add_edge("maybe_web", "compose_answer")
-    graph.add_edge("compose_answer", "finalize")
-    graph.add_edge("finalize", END)
+    tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
 
     checkpointer = None
     if checkpoint_path:
         conn = sqlite3.connect(checkpoint_path, check_same_thread=False)
         checkpointer = SqliteSaver(conn)
-    return graph.compile(checkpointer=checkpointer)
+
+    agent = create_agent(
+        model=f"openai:{DEFAULT_MODEL}",
+        tools=tools,
+        system_prompt=SYSTEM + POLICY,
+        state_schema=InterviewState,
+        middleware=get_middleware(),
+        checkpointer=checkpointer,
+    )
+
+    return agent

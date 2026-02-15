@@ -1,6 +1,6 @@
 {
   "graphs": {
-    "default": "app.agent.graph_controller:build_graph"
+    "default": "app.agent.lg_graph:build_graph"
   },
   "dependencies": [
     "app", 
