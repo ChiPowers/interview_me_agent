@@ -7,7 +7,7 @@ from typing import Dict, Any
 
 from langsmith import Client
 
-from app.eval.evaluators import EvalInput, combined_eval_json
+from eval.evaluators import EvalInput, combined_eval_json
 
 # LangSmith feedback toggles (consistent + permissive parsing)
 _POST_FEEDBACK_RAW = os.getenv("POST_FEEDBACK", "0")

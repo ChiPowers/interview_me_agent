@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from app.services.vectorstore import load_faiss_or_none
+from services.vectorstore import load_faiss_or_none
 from .lc_prompts import SYSTEM
 
 

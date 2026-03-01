@@ -5,9 +5,9 @@ import os
 from pydantic import BaseModel, Field
 from langchain.tools import tool
 from tavily import TavilyClient
-from app.services.web_fetch import fetch_and_clean
-from app.services.vectorstore import load_faiss_or_none
-from app.agent.lg_utils import multiquery_local_search
+from services.web_fetch import fetch_and_clean
+from services.vectorstore import load_faiss_or_none
+from agent.lg_utils import multiquery_local_search
 
 
 # -----------------------------

@@ -63,7 +63,7 @@ def chivon_eval_adapter(inputs: dict, outputs: dict, reference_outputs: dict, *,
     """
     Wrap app.eval.evaluators.default_eval_suite -> list of dicts that LangSmith accepts.
     """
-    from app.eval.evaluators import EvalInput, default_eval_suite
+    from eval.evaluators import EvalInput, default_eval_suite
 
     q = inputs.get("question") or inputs.get("input") or ""
     a = outputs.get("answer") or outputs.get("output") or ""
