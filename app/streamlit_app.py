@@ -16,6 +16,8 @@ import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("interview_agent")
 
+logger.info("OPENAI_API_KEY present: %s", bool(os.getenv("OPENAI_API_KEY")))
+
 
 # ---------- env & page ----------
 load_dotenv()
