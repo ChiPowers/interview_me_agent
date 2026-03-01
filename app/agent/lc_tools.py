@@ -49,11 +49,19 @@ def retrieve_local_tool(query: str, k: int = 6) -> str:
 # -----------------------------
 # This tool emits JSON-like search results (title, url, content) by default.
 # Requires TAVILY_API_KEY in the environment.
-TAVILY = TavilySearch(
-    max_results=3,
-    include_answer=True, 
-    include_raw_content=False
-)
+try:
+    TAVILY = TavilySearch(
+        max_results=3,
+        include_answer=True,
+        include_raw_content=False,
+    )
+except Exception:
+    @tool("tavily_search")
+    def _tavily_fallback(query: str) -> str:
+        """Fallback search tool when Tavily is unavailable."""
+        return "[tavily_search] unavailable (missing TAVILY_API_KEY)"
+
+    TAVILY = _tavily_fallback
 
 
 # -----------------------------

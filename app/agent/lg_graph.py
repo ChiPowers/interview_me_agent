@@ -11,7 +11,6 @@ import os
 import sqlite3
 from typing import Optional
 
-from langchain.agents import create_agent
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .lc_prompts import SYSTEM
@@ -42,6 +41,15 @@ def build_graph(checkpoint_path: Optional[str] = None):
     with middleware controlling RAG routing, hallucination guard, and
     trace/footnote collection.
     """
+    try:
+        from langgraph.prebuilt import create_react_agent
+        from langchain_openai import ChatOpenAI
+        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+    except Exception as exc:  # pragma: no cover - import guard for envs without langgraph
+        raise RuntimeError(
+            "LangGraph backend unavailable. Install/upgrade langgraph to use LGController."
+        ) from exc
+
     tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
 
     checkpointer = None
@@ -49,13 +57,21 @@ def build_graph(checkpoint_path: Optional[str] = None):
         conn = sqlite3.connect(checkpoint_path, check_same_thread=False)
         checkpointer = SqliteSaver(conn)
 
-    agent = create_agent(
-        model=f"openai:{DEFAULT_MODEL}",
+    llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0.2)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", SYSTEM + POLICY),
+            MessagesPlaceholder("messages"),
+        ]
+    )
+
+    agent = create_react_agent(
+        model=llm,
         tools=tools,
-        system_prompt=SYSTEM + POLICY,
+        prompt=prompt,
         state_schema=InterviewState,
-        middleware=get_middleware(),
         checkpointer=checkpointer,
+        middleware=get_middleware(),
     )
 
     return agent
