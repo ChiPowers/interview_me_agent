@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 
 from services.ingest_index import ensure_index  # auto-build/load on boot
 from agent.lc_controller import LCController
-from agent.lg_controller import LGController
 
 import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
@@ -172,6 +171,7 @@ def _init_controller():
         logger.info("Using legacy LangChain controller (AGENT_BACKEND=langchain).")
         return LCController()
     try:
+        from agent.lg_controller import LGController
         logger.info("Using LangGraph controller (AGENT_BACKEND=%s).", backend)
         return LGController()
     except Exception as exc:

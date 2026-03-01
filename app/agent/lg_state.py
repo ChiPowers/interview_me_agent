@@ -9,8 +9,6 @@ with interview-specific fields.
 from __future__ import annotations
 from typing import TypedDict, List, Any, Dict, Optional
 
-from langchain.agents import AgentState
-
 
 class ToolEvent(TypedDict, total=False):
     """Normalized record of every tool call, regardless of source."""
@@ -20,13 +18,13 @@ class ToolEvent(TypedDict, total=False):
     error: Optional[str]
 
 
-class InterviewState(AgentState):
+class InterviewState(TypedDict, total=False):
     """
     Extended state for the interview agent.
 
-    Inherits ``messages: list`` from AgentState.
     Custom fields are populated by middleware and read by the controller.
     """
+    messages: List[Any]
     # RAG context
     local_context: str
     needs_web: bool
