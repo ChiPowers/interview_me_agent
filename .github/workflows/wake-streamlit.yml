@@ -26,7 +26,7 @@ jobs:
 
       - name: Run wake script
         env:
-          STREAMLIT_APP_URL: "https://interview-me-agent.streamlit.app/"
+          STREAMLIT_APP_URL: "https://interview-me-agent.onrender.com/?health=1"
           ARTIFACT_DIR: "wake_artifacts"
         run: |
           python wake_streamlit.py
