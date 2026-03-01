@@ -65,13 +65,21 @@ def build_graph(checkpoint_path: Optional[str] = None):
         ]
     )
 
-    agent = create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=prompt,
-        state_schema=InterviewState,
-        checkpointer=checkpointer,
-        middleware=get_middleware(),
-    )
+    kwargs = {
+        "model": llm,
+        "tools": tools,
+        "prompt": prompt,
+        "state_schema": InterviewState,
+        "checkpointer": checkpointer,
+    }
+    # Older langgraph versions don't support middleware in create_react_agent
+    try:
+        import inspect
+        if "middleware" in inspect.signature(create_react_agent).parameters:
+            kwargs["middleware"] = get_middleware()
+    except Exception:
+        pass
+
+    agent = create_react_agent(**kwargs)
 
     return agent
