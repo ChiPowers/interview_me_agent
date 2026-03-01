@@ -10,13 +10,33 @@ import os
 import time
 from typing import Any, Dict, List
 
-from langchain.agents.middleware import (
-    AgentMiddleware,
-    ModelRequest,
-    ToolCallRequest,
-    wrap_model_call,
-    after_model,
-)
+try:
+    from langchain.agents.middleware import (
+        AgentMiddleware,
+        ModelRequest,
+        ToolCallRequest,
+        wrap_model_call,
+        after_model,
+    )
+    MIDDLEWARE_AVAILABLE = True
+except Exception:  # pragma: no cover - fallback for envs without middleware support
+    MIDDLEWARE_AVAILABLE = False
+
+    class AgentMiddleware:  # type: ignore
+        pass
+
+    class ModelRequest:  # type: ignore
+        pass
+
+    class ToolCallRequest:  # type: ignore
+        pass
+
+    def wrap_model_call(fn):  # type: ignore
+        return fn
+
+    def after_model(fn):  # type: ignore
+        return fn
+
 from langchain_core.messages import ToolMessage
 
 from .lg_state import InterviewState
@@ -215,6 +235,8 @@ class TraceMiddleware(AgentMiddleware):
 
 def get_middleware() -> list:
     """Return the ordered list of middleware for the interview agent."""
+    if not MIDDLEWARE_AVAILABLE:
+        return []
     return [
         RAGRoutingMiddleware(),
         HallucinationGuardMiddleware(),
