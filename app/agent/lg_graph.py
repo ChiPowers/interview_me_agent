@@ -42,12 +42,11 @@ def build_graph(checkpoint_path: Optional[str] = None):
     trace/footnote collection.
     """
     try:
-        from langgraph.prebuilt import create_react_agent
+        from langchain.agents import create_agent
         from langchain_openai import ChatOpenAI
-        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
     except Exception as exc:  # pragma: no cover - import guard for envs without langgraph
         raise RuntimeError(
-            "LangGraph backend unavailable. Install/upgrade langgraph to use LGController."
+            "LangChain agent backend unavailable. Install/upgrade langchain to use LGController."
         ) from exc
 
     tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
@@ -58,28 +57,12 @@ def build_graph(checkpoint_path: Optional[str] = None):
         checkpointer = SqliteSaver(conn)
 
     llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0.2)
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM + POLICY),
-            MessagesPlaceholder("messages"),
-        ]
+    agent = create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM + POLICY,
+        middleware=get_middleware(),
+        checkpointer=checkpointer,
     )
-
-    kwargs = {
-        "model": llm,
-        "tools": tools,
-        "prompt": prompt,
-        "state_schema": InterviewState,
-        "checkpointer": checkpointer,
-    }
-    # Older langgraph versions don't support middleware in create_react_agent
-    try:
-        import inspect
-        if "middleware" in inspect.signature(create_react_agent).parameters:
-            kwargs["middleware"] = get_middleware()
-    except Exception:
-        pass
-
-    agent = create_react_agent(**kwargs)
 
     return agent

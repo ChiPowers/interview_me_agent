@@ -12,13 +12,13 @@ import os
 import traceback
 from typing import Any, Dict, Optional
 
-from langchain.agents import create_react_agent, AgentExecutor
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.callbacks import BaseCallbackHandler
 
 from .lc_prompts import SYSTEM
 from .lc_tools import retrieve_local_tool, TAVILY, fetch_url_tool
+from .middleware import get_middleware
 from .lg_utils import (
     footnotes_from_events,
 )
@@ -78,18 +78,11 @@ class LCController:
         try:
             tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
             llm = ChatOpenAI(model=DEFAULT_LLM, temperature=0.2)
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", SYSTEM + POLICY),
-                    ("human", "{input}"),
-                ]
-            )
-            react_agent = create_react_agent(llm, tools, prompt)
-            self.agent = AgentExecutor(
-                agent=react_agent,
+            self.agent = create_agent(
+                model=llm,
                 tools=tools,
-                verbose=False,
-                return_intermediate_steps=True,
+                system_prompt=SYSTEM + POLICY,
+                middleware=get_middleware(),
             )
             self.init_error = None
         except Exception:
@@ -109,7 +102,7 @@ class LCController:
         catcher = _RunIdCatcher()
         try:
             result = self.agent.invoke(
-                {"input": question},
+                {"messages": [{"role": "user", "content": question}]},
                 config={"callbacks": [catcher]},
             )
         except Exception as exc:
@@ -119,17 +112,28 @@ class LCController:
                 "trace": {"error": str(exc)},
             }
 
-        answer = (result.get("output") or "").strip()
+        messages = result.get("messages", [])
+        answer = ""
+        for msg in reversed(messages):
+            content = getattr(msg, "content", None) or (
+                msg.get("content") if isinstance(msg, dict) else ""
+            )
+            msg_type = getattr(msg, "type", None) or (
+                msg.get("role") if isinstance(msg, dict) else ""
+            )
+            if msg_type in ("ai", "assistant") and content:
+                answer = content.strip()
+                break
 
-        # Build footnotes from intermediate tool steps
+        # Build footnotes from tool messages
         tool_events = []
-        for step in result.get("intermediate_steps", []) or []:
-            action, observation = step
-            tool_events.append({
-                "tool": getattr(action, "tool", "tool"),
-                "input": {"tool_input": getattr(action, "tool_input", "")},
-                "observation": observation or "",
-            })
+        for msg in messages:
+            if getattr(msg, "type", None) == "tool":
+                tool_events.append({
+                    "tool": getattr(msg, "name", "tool"),
+                    "input": {},
+                    "observation": getattr(msg, "content", "") or "",
+                })
         footnotes = footnotes_from_events(tool_events)
 
         run_id_str = str(catcher.top_run_id) if catcher.top_run_id else None
