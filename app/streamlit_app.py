@@ -16,8 +16,6 @@ import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("interview_agent")
 
-logger.info("OPENAI_API_KEY present: %s", bool(os.getenv("OPENAI_API_KEY")))
-
 
 # ---------- env & page ----------
 load_dotenv()
@@ -26,6 +24,15 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded",
 )
+
+# Health check: return quickly when requested (for external monitoring)
+try:
+    qp = st.experimental_get_query_params()
+    if "health" in qp or "healthz" in qp:
+        st.write("ok")
+        st.stop()
+except Exception:
+    pass
 
 # ---------- assets (robust for local & Streamlit Cloud) ----------
 from pathlib import Path
