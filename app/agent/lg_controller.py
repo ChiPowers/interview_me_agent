@@ -32,7 +32,10 @@ class LGController:
     """LangGraph-based controller using create_agent with middleware."""
 
     def __init__(self, checkpoint_path: Optional[str] = None, thread_id: Optional[str] = None):
-        self.checkpoint_path = checkpoint_path or _default_checkpoint_path()
+        if os.getenv("LANGGRAPH_CHECKPOINTING", "0") == "1":
+            self.checkpoint_path = checkpoint_path or _default_checkpoint_path()
+        else:
+            self.checkpoint_path = None
         self.agent = build_graph(checkpoint_path=self.checkpoint_path)
         self.thread_id = thread_id or os.getenv("LANGGRAPH_THREAD_ID") or str(uuid.uuid4())
         self.turn_index = 0

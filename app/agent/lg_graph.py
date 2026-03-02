@@ -52,7 +52,7 @@ def build_graph(checkpoint_path: Optional[str] = None):
     tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
 
     checkpointer = None
-    if checkpoint_path:
+    if checkpoint_path and os.getenv("LANGGRAPH_CHECKPOINTING", "0") == "1":
         conn = sqlite3.connect(checkpoint_path, check_same_thread=False)
         checkpointer = SqliteSaver(conn)
 
