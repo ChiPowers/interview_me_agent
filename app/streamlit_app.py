@@ -19,6 +19,12 @@ logger = logging.getLogger("interview_agent")
 
 # ---------- env & page ----------
 load_dotenv()
+
+# Enable LangSmith tracing if key is present
+if os.getenv("LANGSMITH_API_KEY"):
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGCHAIN_PROJECT", os.getenv("LANGCHAIN_PROJECT", "interview-me-agent"))
+
 st.set_page_config(
     page_title="Interview Chivon Powers",
     layout="centered",

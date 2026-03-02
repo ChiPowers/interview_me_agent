@@ -15,3 +15,9 @@ services:
         sync: false
       - key: TAVILY_API_KEY
         sync: false
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGCHAIN_TRACING_V2
+        value: "true"
+      - key: LANGCHAIN_PROJECT
+        value: "interview-me-agent"
