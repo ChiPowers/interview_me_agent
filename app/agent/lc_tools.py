@@ -7,6 +7,7 @@ from langchain.tools import tool
 from tavily import TavilyClient
 from services.web_fetch import fetch_and_clean
 from services.vectorstore import load_faiss_or_none
+from services.ingest_index import ensure_index
 from agent.lg_utils import multiquery_local_search
 
 
@@ -32,7 +33,13 @@ def retrieve_local_tool(query: str, k: int = 6) -> str:
     """
     vs = load_faiss_or_none()
     if vs is None:
-        return "[retrieve_local] No index loaded. Click (Re)Build Index in the app."
+        try:
+            ensure_index()
+        except Exception:
+            pass
+        vs = load_faiss_or_none()
+        if vs is None:
+            return "[retrieve_local] No index loaded. Click (Re)Build Index in the app."
 
     # Fan-out rewrites can improve recall but adds an extra LLM call.
     rewrites = int(os.getenv("LOCAL_RETRIEVAL_REWRITES", "0"))

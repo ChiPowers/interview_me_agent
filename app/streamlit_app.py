@@ -12,6 +12,33 @@ from dotenv import load_dotenv
 # Load .env before importing app modules that initialize LLM/tracing internals.
 load_dotenv()
 
+def _hydrate_env_from_secrets() -> None:
+    """Mirror Streamlit secrets into process env for libraries/tools that use os.getenv."""
+    key_map = {
+        "OPENAI_API_KEY": ["OPENAI_API_KEY"],
+        "TAVILY_API_KEY": ["TAVILY_API_KEY", "TAVILY_KEY"],
+        "LANGSMITH_API_KEY": ["LANGSMITH_API_KEY", "LANGSMITH_EVAL_API_KEY"],
+        "LANGCHAIN_ENDPOINT": ["LANGCHAIN_ENDPOINT"],
+        "LANGCHAIN_PROJECT": ["LANGCHAIN_PROJECT"],
+        "LANGCHAIN_TRACING_V2": ["LANGCHAIN_TRACING_V2"],
+        "LANGSMITH_TRACING": ["LANGSMITH_TRACING"],
+    }
+    try:
+        secrets = st.secrets
+    except Exception:
+        return
+    for env_key, secret_keys in key_map.items():
+        if os.getenv(env_key):
+            continue
+        for sk in secret_keys:
+            val = secrets.get(sk)
+            if val:
+                os.environ[env_key] = str(val)
+                break
+
+
+_hydrate_env_from_secrets()
+
 from services.ingest_index import ensure_index  # auto-build/load on boot
 from agent.lc_controller import LCController
 
