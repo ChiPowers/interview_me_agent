@@ -20,7 +20,14 @@ except Exception:  # pragma: no cover
         return None
 
 from .lg_state import AgentState
-from . import lg_nodes
+from .lg_nodes import (
+    prepare_local_context,
+    decide_retrieval_strategy,
+    route_after_decision,
+    retrieve_local_pass,
+    route_after_local_pass,
+    maybe_web_search_pass,
+)
 from .lg_utils import compose_answer_with_policy, compose_answer_with_policy_stream, footnotes_from_events
 from .middleware import evaluate_answer_post
 from .eval_utils import maybe_post_feedback_async, POST_FEEDBACK_ENABLED
@@ -50,14 +57,14 @@ class LGController:
             "input": question,
             "tool_events": [],
         }
-        state = lg_nodes.prepare_local_context(state)
-        state = lg_nodes.decide_retrieval_strategy(state)
+        state = prepare_local_context(state)
+        state = decide_retrieval_strategy(state)
 
-        route = lg_nodes.route_after_decision(state)
+        route = route_after_decision(state)
         if route in ("local_only", "needs_web"):
-            state = lg_nodes.retrieve_local_pass(state)
-            if lg_nodes.route_after_local_pass(state) == "web":
-                state = lg_nodes.maybe_web_search_pass(state)
+            state = retrieve_local_pass(state)
+            if route_after_local_pass(state) == "web":
+                state = maybe_web_search_pass(state)
         return state
 
     @traceable(name="LGController.respond", run_type="chain")
@@ -144,4 +151,3 @@ if __name__ == "__main__":
     controller = LGController()
     result = controller.respond(args.question)
     print(json.dumps(result, indent=2, ensure_ascii=False))
-
