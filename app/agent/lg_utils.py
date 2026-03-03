@@ -9,8 +9,27 @@ from typing import Any, Dict, List, Tuple
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from services.vectorstore import load_faiss_or_none
+from app.services.vectorstore import load_faiss_or_none
 from .lc_prompts import SYSTEM
+
+
+def _filter_scored_docs(scored_docs, min_docs: int = 4):
+    if not scored_docs:
+        return []
+    scores = [s for _d, s in scored_docs]
+    lower_is_better = scores[0] <= scores[-1]
+    if lower_is_better:
+        best = min(scores)
+        # Keep a broader tail to preserve potentially relevant recent/patent chunks.
+        thresh = 0.35 if best <= 0 else best * 2.5
+        filtered = [(d, s) for d, s in scored_docs if s <= thresh]
+    else:
+        best = max(scores)
+        thresh = best / 2.5 if best else 0
+        filtered = [(d, s) for d, s in scored_docs if s >= thresh]
+    if len(filtered) < min_docs:
+        return scored_docs[:min_docs]
+    return filtered
 
 
 def local_context_from_faiss(question: str, k: int = 6) -> str:
@@ -18,9 +37,11 @@ def local_context_from_faiss(question: str, k: int = 6) -> str:
     if vs is None:
         return "[local] No index loaded."
     try:
-        docs = vs.similarity_search(question, k=k)
+        scored = vs.similarity_search_with_score(question, k=k)
     except Exception as e:  # pragma: no cover - defensive guard
         return f"[local] error: {e}"
+    scored = _filter_scored_docs(scored, min_docs=min(2, k))
+    docs = [d for d, _s in scored]
     blocks = []
     for d in docs:
         label = d.metadata.get("label") or d.metadata.get("source", "local.pdf")
@@ -39,7 +60,7 @@ def rewrite_queries(question: str, n: int = 3) -> List[str]:
     if n <= 0:
         return []
     llm = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         temperature=0.3,
         max_tokens=120,
     )
@@ -88,7 +109,7 @@ def multiquery_local_search(
 
     for q in queries:
         try:
-            docs = vs.similarity_search(q, k=k_per_query)
+            scored = vs.similarity_search_with_score(q, k=k_per_query)
         except Exception as exc:  # pragma: no cover - defensive guard
             events.append({
                 "tool": "faiss_search",
@@ -99,7 +120,8 @@ def multiquery_local_search(
             continue
 
         obs_lines = []
-        for d in docs:
+        scored = _filter_scored_docs(scored, min_docs=min(2, k_per_query))
+        for d, _s in scored:
             label = d.metadata.get("label") or d.metadata.get("source", "local.pdf")
             text = (d.page_content or "").strip().replace("\n", " ")
             snippet = text[:320] + ("…" if len(text) > 320 else "")
@@ -216,7 +238,7 @@ def compose_from_observations(question: str, steps: List[Tuple[Any, Any]]) -> st
             break
     urls = list(dict.fromkeys(urls))[:3]
 
-    llm = ChatOpenAI(model=os.getenv("OPENAI_COMPOSER_MODEL", os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_COMPOSER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")), temperature=0.2)
     compose = ChatPromptTemplate.from_messages(
         [
             (
@@ -267,9 +289,76 @@ def compose_answer_with_policy(
         ("system", SYSTEM + "\n" + policy),
         ("human", "Question: {question}\n\nContext:\n{context}"),
     ])
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07"), temperature=0.2)
-    raw_answer = llm.invoke(prompt.format_messages(question=question, context=combined_context)).content.strip()
-    return guard_answer_with_evidence(question, raw_answer, combined_context)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.2)
+    return llm.invoke(prompt.format_messages(question=question, context=combined_context)).content.strip()
+
+
+def build_combined_context(
+    local_context: str,
+    local_chunks: str,
+    web_results: Any,
+    web_page: str,
+) -> str:
+    """Build the canonical context string used by both sync and streaming composition."""
+    context_sections = []
+    if local_context:
+        context_sections.append(f"LOCAL_CONTEXT:\n{local_context}")
+    if local_chunks and "[retrieve_local]" not in local_chunks:
+        context_sections.append(f"LOCAL_RETRIEVAL:\n{local_chunks}")
+    if web_results:
+        snippet = json.dumps(web_results, ensure_ascii=False) if isinstance(web_results, (dict, list)) else str(web_results)
+        context_sections.append(f"WEB_SEARCH:\n{snippet[:1800]}")
+    if web_page:
+        context_sections.append(f"WEB_PAGE:\n{web_page[:1800]}")
+    return "\n\n---\n\n".join(context_sections) if context_sections else "No supporting context."
+
+
+def _extract_chunk_text(chunk: Any) -> str:
+    """Normalize LangChain/OpenAI stream chunks to plain text."""
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    parts.append(str(text))
+        return "".join(parts)
+    return str(content or "")
+
+
+def compose_answer_with_policy_stream(
+    question: str,
+    local_context: str,
+    local_chunks: str,
+    web_results: Any,
+    web_page: str,
+):
+    """
+    Stream the draft answer token-by-token.
+
+    Yields text chunks from the model stream, then returns final full text via StopIteration value.
+    """
+    combined_context = build_combined_context(local_context, local_chunks, web_results, web_page)
+    policy = (
+        "Answer strictly in first person, professional tone. "
+        "Limit to <=3 sentences and <=90 words. "
+        "Reference the provided context and mark citations with [1], [2]."
+    )
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM + "\n" + policy),
+        ("human", "Question: {question}\n\nContext:\n{context}"),
+    ])
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.2)
+    full_text_parts: List[str] = []
+    for chunk in llm.stream(prompt.format_messages(question=question, context=combined_context)):
+        text = _extract_chunk_text(chunk)
+        if not text:
+            continue
+        full_text_parts.append(text)
+        yield text
 
 
 def guard_answer_with_evidence(question: str, answer: str, context: str) -> str:
@@ -281,7 +370,7 @@ def guard_answer_with_evidence(question: str, answer: str, context: str) -> str:
         return answer
 
     checker = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         temperature=0,
         max_tokens=160,
     )
@@ -357,7 +446,7 @@ def analyze_local_context(question: str, local_ctx: str) -> Dict[str, Any]:
 def should_use_web_judge(question: str, local_ctx: str) -> Dict[str, Any]:
     """Tiny LLM judge to double-check the routing heuristic."""
     judge = ChatOpenAI(
-        model=os.getenv("OPENAI_ROUTE_MODEL", os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")),
+        model=os.getenv("OPENAI_ROUTE_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
         temperature=0,
         max_tokens=32,
         timeout=8,

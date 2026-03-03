@@ -9,8 +9,35 @@ import streamlit as st
 from PIL import Image
 from dotenv import load_dotenv
 
-# Load .env before importing app modules that initialize LLM/tracing internals.
+# ---------- env ----------
+# Load .env before importing app modules that read env at import-time.
 load_dotenv()
+
+def _hydrate_env_from_secrets() -> None:
+    """Mirror Streamlit secrets into env for tools/SDKs that rely on os.getenv."""
+    key_map = {
+        "OPENAI_API_KEY": ["OPENAI_API_KEY"],
+        "TAVILY_API_KEY": ["TAVILY_API_KEY", "TAVILY_KEY"],
+        "LANGSMITH_API_KEY": ["LANGSMITH_API_KEY", "LANGSMITH_EVAL_API_KEY"],
+        "LANGCHAIN_TRACING_V2": ["LANGCHAIN_TRACING_V2"],
+        "LANGCHAIN_PROJECT": ["LANGCHAIN_PROJECT"],
+        "LANGCHAIN_ENDPOINT": ["LANGCHAIN_ENDPOINT"],
+    }
+    try:
+        secrets = st.secrets
+    except Exception:
+        return
+    for env_key, secret_keys in key_map.items():
+        if os.getenv(env_key):
+            continue
+        for sk in secret_keys:
+            val = secrets.get(sk)
+            if val:
+                os.environ[env_key] = str(val)
+                break
+
+
+_hydrate_env_from_secrets()
 
 from services.ingest_index import ensure_index  # auto-build/load on boot
 
@@ -18,36 +45,13 @@ import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("interview_agent")
 
-# Log key presence (not value) to verify env wiring in deploys
-logger.info("OPENAI_API_KEY present: %s", bool(os.getenv("OPENAI_API_KEY")))
 
-
-# ---------- env & page ----------
-# Enable LangSmith tracing if key is present.
-if os.getenv("LANGSMITH_API_KEY"):
-    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-    os.environ.setdefault("LANGCHAIN_PROJECT", os.getenv("LANGCHAIN_PROJECT", "interview-me-agent"))
-
-# Support both tracing env names for compatibility across LangSmith/LangChain versions.
-if os.getenv("LANGSMITH_TRACING") and not os.getenv("LANGCHAIN_TRACING_V2"):
-    os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGSMITH_TRACING", "")
-if os.getenv("LANGCHAIN_TRACING_V2") and not os.getenv("LANGSMITH_TRACING"):
-    os.environ["LANGSMITH_TRACING"] = os.getenv("LANGCHAIN_TRACING_V2", "")
-
+# ---------- page ----------
 st.set_page_config(
     page_title="Interview Chivon Powers",
     layout="centered",
     initial_sidebar_state="expanded",
 )
-
-# Health check: return quickly when requested (for external monitoring)
-try:
-    qp = st.experimental_get_query_params()
-    if "health" in qp or "healthz" in qp:
-        st.write("ok")
-        st.stop()
-except Exception:
-    pass
 
 # ---------- assets (robust for local & Streamlit Cloud) ----------
 from pathlib import Path
@@ -68,8 +72,8 @@ env_static = Path(os.getenv("STATIC_DIR", "")).resolve() if os.getenv("STATIC_DI
 
 STATIC_DIR = _first_existing_dir([
     env_static,
-    REPO_ROOT / "static",     # repo/static
     APP_DIR / "static",       # repo/app/static
+    REPO_ROOT / "static",     # repo/static
     CWD / "static",           # cwd/static
 ])
 
@@ -92,9 +96,37 @@ def _path_if_exists(dirpath: Path, name: str) -> Path | None:
     p = dirpath / name
     return p if p.exists() else None
 
-# Try to find each image under the chosen STATIC_DIR
+
+def _pick_headshot(static_dir: Path | None) -> Path | None:
+    """
+    Pick headshot in priority order:
+    1) HEADSHOT_PATH override
+    2) explicit candidate names
+    3) newest file matching common headshot/profile patterns
+    """
+    override = Path(os.getenv("HEADSHOT_PATH", "")).resolve() if os.getenv("HEADSHOT_PATH") else None
+    if override and override.exists():
+        return override
+    if not static_dir:
+        return None
+
+    for name in ("cp_face.png", "headshot.png", "profile.png", "avatar.png"):
+        p = static_dir / name
+        if p.exists():
+            return p
+
+    candidates = []
+    patterns = ("*headshot*.png", "*headshot*.jpg", "*profile*.png", "*profile*.jpg", "*avatar*.png", "*avatar*.jpg")
+    for pat in patterns:
+        candidates.extend(static_dir.glob(pat))
+    if candidates:
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return candidates[0]
+    return None
+
+# Try to find each image under the chosen STATIC_DIR.
 LOGO_FILE     = _path_if_exists(STATIC_DIR, "logotat.png")
-HEADSHOT_FILE = _path_if_exists(STATIC_DIR, "headshot.png")
+HEADSHOT_FILE = _pick_headshot(STATIC_DIR)
 # Allow multiple names so deployments stay resilient
 CHATSHOT_FILE = (
     _path_if_exists(STATIC_DIR, "logotat.png")
@@ -107,6 +139,7 @@ chatshot_b64 = _read_image_b64(CHATSHOT_FILE) if CHATSHOT_FILE else ""
 
 # Debug logging so you can see what Cloud/local picked
 logger.info("STATIC_DIR: %s", str(STATIC_DIR) if STATIC_DIR else "None")
+logger.info("HEADSHOT_FILE: %s", str(HEADSHOT_FILE) if HEADSHOT_FILE else "None")
 logger.info("Assets found -> logo:%s headshot:%s chatshot:%s",
             bool(logo_b64), bool(headshot_b64), bool(chatshot_b64))
 
@@ -184,10 +217,7 @@ with st.sidebar:
 # ---------- ensure index ready once ----------
 @st.cache_resource(show_spinner="Preparing search index…")
 def _ensure_index_ready():
-    try:
-        ensure_index()
-    except Exception as exc:
-        logger.exception("Index initialization failed: %s", exc)
+    ensure_index()
     return True
 _ensure_index_ready()
 
@@ -216,8 +246,13 @@ def _init_controller():
         from agent.lg_controller import LGController
         return LGController()
     except Exception as exc:
-        logger.exception("LangGraph controller failed to initialize, falling back to legacy agent: %s", exc)
-        st.warning("LangGraph backend failed to initialize; attempting legacy LangChain fallback.")
+        logger.exception("LangGraph controller failed to initialize: %s", exc)
+        st.warning("LangGraph backend failed to initialize.")
+        if os.getenv("ALLOW_LEGACY_FALLBACK", "0").lower() not in ("1", "true", "yes", "on"):
+            msg = f"LangGraph error: {exc}"
+            st.error(msg)
+            return _ErrorController(msg)
+        st.warning("Attempting legacy LangChain fallback (ALLOW_LEGACY_FALLBACK=1).")
         try:
             from agent.lc_controller import LCController
             return LCController()
@@ -310,9 +345,21 @@ if submitted:
     else:
         placeholder = st.empty()
 
+        # stream answer tokens as they are generated
+        accum_chunks = []
+        def _on_token(token: str):
+            accum_chunks.append(token)
+            live = "".join(accum_chunks).strip()
+            html_parts = ['<div class="answer-container">']
+            if chatshot_b64:
+                html_parts.append(f'<img src="data:image/png;base64,{chatshot_b64}" class="answer-headshot">')
+            html_parts.append(f'<div class="answer-text">{live}</div>')
+            html_parts.append("</div>")
+            placeholder.markdown("".join(html_parts), unsafe_allow_html=True)
+
         # run agent
         try:
-            result = st.session_state.controller.respond(question.strip())
+            result = st.session_state.controller.respond(question.strip(), on_token=_on_token)
         except Exception as e:
             st.error(f"Error processing your question: {e}")
             raise
@@ -330,22 +377,13 @@ if submitted:
         # keep refs for evaluation
         logger.info("FOOTNOTES (eval only): %s", json.dumps(footnotes, ensure_ascii=False))
         
-        import re
-        visible_answer = re.sub(r"\s*\[\d+\]", "", answer).strip()
-
-        # --- chunked streaming by ~5 words (fast + smooth) ---
-        words = visible_answer.split()
-        chunk_size = 5
-        accum_words = []
-        for i in range(0, len(words), chunk_size):
-            accum_words.extend(words[i:i+chunk_size])
+        if not accum_chunks:
+            # Fallback render if no stream tokens were emitted.
             html_parts = ['<div class="answer-container">']
             if chatshot_b64:
                 html_parts.append(f'<img src="data:image/png;base64,{chatshot_b64}" class="answer-headshot">')
-            html_parts.append(f'<div class="answer-text">{" ".join(accum_words)}</div>')
+            html_parts.append(f'<div class="answer-text">{answer}</div>')
             html_parts.append("</div>")
-            html = "".join(html_parts)
-            placeholder.markdown(html, unsafe_allow_html=True)
-            time.sleep(0.08)
+            placeholder.markdown("".join(html_parts), unsafe_allow_html=True)
 
 st.markdown("<div style='margin-bottom: 40px;'></div>", unsafe_allow_html=True)

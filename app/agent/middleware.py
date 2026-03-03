@@ -1,271 +1,102 @@
 """
-LangChain v1 middleware for the Interview Agent.
+Middleware-style evaluation helpers for the LangGraph pipeline.
 
-Replaces the hand-rolled LangGraph nodes (lg_nodes.py) with composable
-middleware hooks that plug into ``create_agent``.
+These checks run around retrieval/answer composition to keep answers grounded
+without adding heavy latency on every turn.
 """
 from __future__ import annotations
 
 import os
 import re
-import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-from langchain.agents.middleware import (
-    AgentMiddleware,
-    ModelRequest,
-    ToolCallRequest,
-    wrap_model_call,
-    after_model,
-)
+try:
+    from langsmith import traceable
+except Exception:  # pragma: no cover
+    def traceable(*args, **kwargs):
+        def _deco(fn):
+            return fn
+        return _deco
 
-from langchain_core.messages import ToolMessage
+from .lg_utils import guard_answer_with_evidence
 
-from .lg_state import InterviewState
-from .lg_utils import (
-    local_context_from_faiss,
-    analyze_local_context,
-    should_use_web_judge,
-    guard_answer_with_evidence,
-    footnotes_from_events,
-)
-
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
-ENABLE_WEB_JUDGE = os.getenv("ENABLE_WEB_JUDGE", "0").lower() in ("1", "true", "yes", "on")
-ENABLE_LLM_HALLUCINATION_GUARD = os.getenv("ENABLE_HALLUCINATION_GUARD", "1").lower() in ("1", "true", "yes", "on")
-MIN_CONTEXT_CHARS_FOR_GROUNDING = int(os.getenv("MIN_CONTEXT_CHARS_FOR_GROUNDING", "300"))
+ENABLE_LLM_GUARD = os.getenv("ENABLE_HALLUCINATION_GUARD", "1").lower() in ("1", "true", "yes", "on")
+MIN_CONTEXT_CHARS = int(os.getenv("MIN_CONTEXT_CHARS_FOR_GROUNDING", "280"))
 
 
 def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-zA-Z0-9]{4,}", (text or "").lower()))
 
 
-def _fast_grounding_risk_flags(answer: str, local_ctx: str, tool_event_count: int) -> List[str]:
+@traceable(name="middleware.pre_eval", run_type="chain")
+def evaluate_routing_pre(question: str, local_context: str, routing: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fast pre-answer eval. Returns adjusted routing metadata (no model call).
+    """
+    out = dict(routing or {})
+    flags: List[str] = list(out.get("reasons") or [])
+    q_low = (question or "").lower()
+    ctx = local_context or ""
+
+    if ctx.startswith("[local] No index loaded.") or ctx.startswith("[local] error:"):
+        flags.append("grounding_unavailable")
+    if len(ctx) < MIN_CONTEXT_CHARS:
+        flags.append("thin_context")
+    if any(x in q_low for x in ("latest", "current", "today", "recent", "announced", "news")):
+        flags.append("freshness_cue")
+
+    out["middleware_flags"] = sorted(set(flags))
+    out["needs_web"] = bool(out.get("final_use_web") or out.get("tentative_use_web"))
+    return out
+
+
+def _risk_flags(answer: str, context: str, footnote_count: int) -> List[str]:
     flags: List[str] = []
-    a = (answer or "").strip()
-    c = (local_ctx or "").strip()
-
-    if not a:
-        return ["empty_answer"]
-    if c.startswith("[local] No index loaded.") or c.startswith("[local] error:"):
-        flags.append("no_local_evidence")
-    if len(c) < MIN_CONTEXT_CHARS_FOR_GROUNDING:
-        flags.append("thin_local_context")
-    if tool_event_count == 0:
-        flags.append("no_tool_evidence")
-    if not re.search(r"\[\d+\]", a):
-        flags.append("missing_citations")
-
-    answer_tokens = _tokenize(a)
-    ctx_tokens = _tokenize(c)
-    if answer_tokens and ctx_tokens:
-        overlap = len(answer_tokens & ctx_tokens) / max(1, len(answer_tokens))
+    if not answer.strip():
+        flags.append("empty_answer")
+        return flags
+    if len(context or "") < MIN_CONTEXT_CHARS:
+        flags.append("thin_context")
+    if footnote_count == 0:
+        flags.append("missing_footnotes")
+    if not re.search(r"\[\d+\]", answer):
+        flags.append("missing_citation_markers")
+    at = _tokenize(answer)
+    ct = _tokenize(context)
+    if at and ct:
+        overlap = len(at & ct) / max(1, len(at))
         if overlap < 0.12:
             flags.append("low_context_overlap")
-
     return flags
 
 
-# ---------------------------------------------------------------------------
-# 1. Local-context pre-fetch & routing middleware (class-based)
-# ---------------------------------------------------------------------------
-
-class RAGRoutingMiddleware(AgentMiddleware):
+@traceable(name="middleware.post_eval", run_type="chain")
+def evaluate_answer_post(
+    question: str,
+    answer: str,
+    context: str,
+    footnote_count: int,
+) -> Tuple[str, Dict[str, Any]]:
     """
-    Before every model call:
-      - Pre-fetch FAISS context for the latest user question.
-      - Run the routing heuristic (+ optional LLM judge).
-      - Conditionally hide/expose the web-search tool.
-
-    This replaces the old ``prepare_local_context``, ``decide_retrieval_strategy``,
-    and the conditional edges in ``lg_graph.py``.
+    Post-answer eval guard.
+    - Always runs cheap checks.
+    - Runs LLM grounding guard only when risk flags exist.
     """
+    flags = _risk_flags(answer, context, footnote_count)
+    meta = {"risk_flags": flags, "llm_guard_used": False}
+    if not flags:
+        return answer, meta
 
-    state_schema = InterviewState
-
-    def wrap_model_call(self, request: ModelRequest, handler):
-        messages = request.state.get("messages", [])
-        if not messages:
-            return handler(request)
-
-        # Extract latest user question
-        question = ""
-        for msg in reversed(messages):
-            if hasattr(msg, "type") and msg.type == "human":
-                question = msg.content
-                break
-            elif isinstance(msg, dict) and msg.get("role") == "user":
-                question = msg.get("content", "")
-                break
-        if not question:
-            return handler(request)
-
-        # Fetch local context from FAISS
-        local_ctx = local_context_from_faiss(question, k=6)
-
-        # Run routing heuristic
-        verdict = analyze_local_context(question, local_ctx)
-        needs_web = verdict["tentative_use_web"]
-
-        if verdict["confidence"] == "low" and ENABLE_WEB_JUDGE:
-            judge = should_use_web_judge(question, local_ctx)
-            needs_web = judge["use_web"]
-
-        # Store routing info and context in state for downstream use
-        state_updates = {
-            "local_context": local_ctx,
-            "needs_web": needs_web,
-            "routing": {**verdict, "final_use_web": needs_web},
-        }
-        request.state.update(state_updates)
-
-        # Filter tools: hide tavily if web not needed
-        if not needs_web:
-            filtered_tools = [
-                t for t in request.tools
-                if getattr(t, "name", "") != "tavily_search"
-            ]
-            request = request.override(tools=filtered_tools)
-
-        return handler(request)
-
-
-# ---------------------------------------------------------------------------
-# 2. Tool error handling middleware (decorator-based)
-# ---------------------------------------------------------------------------
-
-@wrap_model_call
-def tool_error_middleware(request: ModelRequest, handler):
-    """Pass-through; errors are handled per-tool via wrap_tool_call below."""
-    return handler(request)
-
-
-# ---------------------------------------------------------------------------
-# 3. Hallucination guard middleware (after model responds)
-# ---------------------------------------------------------------------------
-
-class HallucinationGuardMiddleware(AgentMiddleware):
-    """
-    After the model produces a final text response (no tool calls),
-    run the evidence-based hallucination guard and replace the answer
-    if unsupported claims are detected.
-
-    Replaces the old ``guard_answer_with_evidence`` call inside
-    ``compose_answer_pass``.
-    """
-
-    state_schema = InterviewState
-
-    def after_model(self, state, runtime):
-        messages = state.get("messages", [])
-        if not messages:
-            return None
-
-        last_msg = messages[-1]
-        # Only guard final text answers (not tool calls)
-        has_tool_calls = (
-            hasattr(last_msg, "tool_calls") and last_msg.tool_calls
+    if context.startswith("[local] No index loaded.") or context.startswith("[local] error:"):
+        safe = (
+            "I don't have enough grounded local context loaded to answer confidently right now. "
+            "Please ensure the local document index is available, then ask again."
         )
-        if has_tool_calls:
-            return None
+        return safe, meta
 
-        answer = getattr(last_msg, "content", "") or ""
-        if not answer.strip():
-            return None
+    if ENABLE_LLM_GUARD:
+        meta["llm_guard_used"] = True
+        guarded = guard_answer_with_evidence(question, answer, context)
+        return guarded, meta
+    return answer, meta
 
-        local_ctx = state.get("local_context", "")
-        if not local_ctx:
-            return None
-
-        # Find the question
-        question = ""
-        for msg in messages:
-            if hasattr(msg, "type") and msg.type == "human":
-                question = msg.content
-            elif isinstance(msg, dict) and msg.get("role") == "user":
-                question = msg.get("content", "")
-
-        tool_event_count = 0
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                tool_event_count += 1
-
-        risk_flags = _fast_grounding_risk_flags(answer, local_ctx, tool_event_count)
-        if "no_local_evidence" in risk_flags:
-            last_msg.content = (
-                "I don't have enough grounded local evidence to answer this accurately yet. "
-                "Please re-run indexing or share the relevant document section."
-            )
-            return None
-
-        if risk_flags and ENABLE_LLM_HALLUCINATION_GUARD:
-            guarded = guard_answer_with_evidence(question, answer, local_ctx)
-            if guarded != answer:
-                last_msg.content = guarded
-
-        return None
-
-
-# ---------------------------------------------------------------------------
-# 4. Trace & footnotes middleware (after model responds)
-# ---------------------------------------------------------------------------
-
-class TraceMiddleware(AgentMiddleware):
-    """
-    After a final answer, build the trace and footnotes payload and
-    store them in state for the controller to extract.
-    """
-
-    state_schema = InterviewState
-
-    def after_model(self, state, runtime):
-        messages = state.get("messages", [])
-        if not messages:
-            return None
-
-        last_msg = messages[-1]
-        has_tool_calls = (
-            hasattr(last_msg, "tool_calls") and last_msg.tool_calls
-        )
-        if has_tool_calls:
-            return None
-
-        # Build tool_events from message history
-        tool_events: List[Dict[str, Any]] = []
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                tool_events.append({
-                    "tool": getattr(msg, "name", "tool"),
-                    "input": {},
-                    "observation": msg.content or "",
-                })
-
-        footnotes = footnotes_from_events(tool_events)
-
-        trace = {
-            "plan": "create_agent RAG (local-first with web fallback)",
-            "routing": state.get("routing"),
-            "tool_events": tool_events,
-            "local_context_preview": (state.get("local_context") or "")[:800],
-            "timestamp": time.time(),
-            "controller": "create_agent_v1",
-        }
-
-        state["tool_events"] = tool_events
-        state["footnotes"] = footnotes
-        state["trace"] = trace
-
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Middleware list for create_agent (order matters)
-# ---------------------------------------------------------------------------
-
-def get_middleware() -> list:
-    """Return the ordered list of middleware for the interview agent."""
-    return [
-        RAGRoutingMiddleware(),
-        HallucinationGuardMiddleware(),
-        TraceMiddleware(),
-    ]

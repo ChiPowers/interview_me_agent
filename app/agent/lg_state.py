@@ -1,38 +1,47 @@
 # app/agent/lg_state.py
-"""
-State schemas for the Interview Agent.
-
-LangChain v1 requires TypedDict for custom state. The base ``AgentState``
-from ``langchain.agents`` provides the ``messages`` list; we extend it
-with interview-specific fields.
-"""
 from __future__ import annotations
 from typing import TypedDict, List, Any, Dict, Optional
 
 
 class ToolEvent(TypedDict, total=False):
-    """Normalized record of every tool call, regardless of source."""
+    """Normalized record of every tool call, regardless of source (FAISS, Tavily, fetch_url)."""
     tool: str
     input: Any
     observation: Any
     error: Optional[str]
 
 
-class InterviewState(TypedDict, total=False):
+class AgentState(TypedDict, total=False):
     """
-    Extended state for the interview agent.
+    Shared LangGraph state container.
 
-    Custom fields are populated by middleware and read by the controller.
+    The LangChain-based controller will also reuse this structure so we can swap controllers
+    without changing the Streamlit surface area.
     """
-    messages: List[Any]
-    # RAG context
+    # request metadata
+    thread_id: Optional[str]
+    turn_index: int
+
+    # user prompt & context
+    question: str
+    input: str  # alias for question to keep compatibility with legacy helpers
     local_context: str
+
+    # routing + analysis
     needs_web: bool
     routing: Dict[str, Any]
+
+    # conversation scaffolding (LangChain/ChatML messages)
+    chat_history: List[Any]
+    scratchpad: List[Any]
 
     # tool traces
     tool_events: List[ToolEvent]
 
-    # outputs (populated by middleware)
+    # outputs
+    answer: str
+    output: str  # alias for answer
     footnotes: Dict[int, Dict[str, str]]
     trace: Dict[str, Any]
+    eval: Dict[str, Any]
+    error: Optional[str]

@@ -8,6 +8,7 @@ LangChain-based controller can reuse the same primitives during the migration.
 from __future__ import annotations
 
 from typing import Dict, Any
+import os
 import time
 
 from .lg_state import AgentState, ToolEvent
@@ -20,12 +21,16 @@ from .lg_utils import (
     multiquery_local_search,
 )
 from .lc_tools import retrieve_local_tool, TAVILY, fetch_url_tool
+from .middleware import evaluate_routing_pre, evaluate_answer_post
+
+ENABLE_WEB_JUDGE = os.getenv("ENABLE_WEB_JUDGE", "0").lower() in ("1", "true", "yes", "on")
+LOCAL_RETRIEVAL_REWRITES = int(os.getenv("LOCAL_RETRIEVAL_REWRITES", "2"))
 
 
 def prepare_local_context(state: AgentState) -> AgentState:
     """Populate the FAISS-derived local context."""
     question = state.get("question") or state.get("input") or ""
-    ctx = local_context_from_faiss(question, k=6)
+    ctx = local_context_from_faiss(question, k=12)
     out = dict(state)
     out["local_context"] = ctx
     out["input"] = question  # keep alias in sync
@@ -45,10 +50,14 @@ def decide_retrieval_strategy(state: AgentState) -> AgentState:
     needs_web = verdict["tentative_use_web"]
     judge_reason = None
 
-    if verdict["confidence"] == "low":
+    if verdict["confidence"] == "low" and ENABLE_WEB_JUDGE:
         judge = should_use_web_judge(question, local_ctx)
         needs_web = judge["use_web"]
         judge_reason = judge["reason"]
+
+    verdict["final_use_web"] = needs_web
+    verdict = evaluate_routing_pre(question=question, local_context=local_ctx, routing=verdict)
+    needs_web = bool(verdict.get("needs_web"))
 
     out = dict(state)
     out["needs_web"] = needs_web
@@ -73,7 +82,12 @@ def retrieve_local_pass(state: AgentState) -> AgentState:
     """Call the FAISS-backed retrieval tool with multi-query fan-out and record outputs."""
     question = state.get("question") or state.get("input") or ""
 
-    mq = multiquery_local_search(question, rewrites=3, k_per_query=3, top_k=6)
+    mq = multiquery_local_search(
+        question,
+        rewrites=max(0, LOCAL_RETRIEVAL_REWRITES),
+        k_per_query=4,
+        top_k=10,
+    )
 
     events = list(state.get("tool_events", []))
     if mq.get("rewrites"):
@@ -160,10 +174,17 @@ def compose_answer_pass(state: AgentState) -> AgentState:
     )
     events = state.get("tool_events", [])
     footnotes = footnotes_from_events(events)
+    guarded_answer, eval_meta = evaluate_answer_post(
+        question=question,
+        answer=answer,
+        context=state.get("local_context", ""),
+        footnote_count=len(footnotes or {}),
+    )
     out = dict(state)
-    out["answer"] = answer
-    out["output"] = answer
+    out["answer"] = guarded_answer
+    out["output"] = guarded_answer
     out["footnotes"] = footnotes
+    out["eval"] = eval_meta
     return out
 
 
@@ -175,6 +196,7 @@ def finalize_pass(state: AgentState) -> AgentState:
         "routing": state.get("routing"),
         "tool_events": events,
         "local_context_preview": (state.get("local_context") or "")[:800],
+        "eval": state.get("eval", {}),
         "timestamp": time.time(),
     }
 

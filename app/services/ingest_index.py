@@ -71,7 +71,8 @@ def _load_pdfs(pdf_dir: Path) -> list:
 
 
 def _split_and_label(docs: list) -> list:
-    splitter = RecursiveCharacterTextSplitter(chunk_size=100, chunk_overlap=20)
+    # Larger chunks preserve semantic context and improve retrieval quality.
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
     chunks = splitter.split_documents(docs)
     # Add friendly labels (used in citations)
     for c in chunks:
@@ -94,6 +95,9 @@ def build_index(pdf_dir: Path) -> FAISS:
 def ensure_index(pdf_dir: Path | str | None = None) -> None:
     """Load FAISS if present; otherwise build from PDFs once."""
     pdf_dir = Path(pdf_dir) if pdf_dir else Path(DATA_RAW_DIR)
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.warning("OPENAI_API_KEY not set; skipping FAISS build.")
+        return
     if load_faiss_or_none() is None:
         logger.info("No FAISS index found, building new one...")
         build_index(pdf_dir)
