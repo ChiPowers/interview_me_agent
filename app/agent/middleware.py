@@ -30,6 +30,8 @@ from .lg_utils import (
 )
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
+ENABLE_WEB_JUDGE = os.getenv("ENABLE_WEB_JUDGE", "0").lower() in ("1", "true", "yes", "on")
+ENABLE_HALLUCINATION_GUARD = os.getenv("ENABLE_HALLUCINATION_GUARD", "0").lower() in ("1", "true", "yes", "on")
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +75,7 @@ class RAGRoutingMiddleware(AgentMiddleware):
         verdict = analyze_local_context(question, local_ctx)
         needs_web = verdict["tentative_use_web"]
 
-        if verdict["confidence"] == "low":
+        if verdict["confidence"] == "low" and ENABLE_WEB_JUDGE:
             judge = should_use_web_judge(question, local_ctx)
             needs_web = judge["use_web"]
 
@@ -123,6 +125,9 @@ class HallucinationGuardMiddleware(AgentMiddleware):
     state_schema = InterviewState
 
     def after_model(self, state, runtime):
+        if not ENABLE_HALLUCINATION_GUARD:
+            return None
+
         messages = state.get("messages", [])
         if not messages:
             return None

@@ -15,7 +15,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from langchain_core.callbacks import BaseCallbackHandler
 try:
     from langsmith import traceable
     from langsmith.run_helpers import get_current_run_tree
@@ -66,18 +65,6 @@ class LGController:
         return "role 'tool'" in text and "tool_calls" in text
 
     def respond(self, question: str) -> Dict[str, Any]:
-        class _RunIdCatcher(BaseCallbackHandler):
-            def __init__(self):
-                self.top_run_id = None
-
-            def on_chain_start(self, serialized, inputs, run_id, **kwargs):
-                if self.top_run_id is None:
-                    self.top_run_id = run_id
-
-            def on_llm_start(self, serialized, prompts, run_id, **kwargs):
-                if self.top_run_id is None:
-                    self.top_run_id = run_id
-
         self.turn_index += 1
         logger.info("[LG] Q%d: %s", self.turn_index, question)
 
@@ -85,11 +72,7 @@ class LGController:
         input_state = {
             "messages": [{"role": "user", "content": question}],
         }
-        catcher = _RunIdCatcher()
-        config = {
-            "configurable": {"thread_id": self.thread_id},
-            "callbacks": [catcher],
-        }
+        config = {"configurable": {"thread_id": self.thread_id}}
 
         start = time.time()
         try:
@@ -105,7 +88,6 @@ class LGController:
                 )
                 try:
                     config = {"configurable": {"thread_id": self.thread_id}}
-                    config["callbacks"] = [catcher]
                     result, traceable_run_id = _invoke_agent_with_trace(self.agent, input_state, config)
                 except Exception as retry_exc:
                     logger.exception("[LG] Retry after thread rotation failed: %s", retry_exc)
@@ -154,8 +136,7 @@ class LGController:
         trace.setdefault("plan", "create_agent RAG (local-first with web fallback)")
         trace.setdefault("routing", result.get("routing"))
         trace.setdefault("local_context_preview", (result.get("local_context") or "")[:800])
-        run_id_str = str(catcher.top_run_id) if catcher.top_run_id else None
-        trace["run_id"] = trace.get("run_id") or run_id_str or traceable_run_id
+        trace["run_id"] = trace.get("run_id") or traceable_run_id
         trace["controller"] = "create_agent_v1"
         trace["latency_ms"] = latency_ms
         self._last_trace = trace
