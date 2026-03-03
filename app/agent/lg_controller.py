@@ -28,7 +28,13 @@ except Exception:  # pragma: no cover - optional dependency behavior
         return None
 
 from .lg_graph import build_graph
-from .lg_utils import footnotes_from_events
+from .lc_tools import retrieve_local_tool, TAVILY
+from .lg_utils import (
+    footnotes_from_events,
+    local_context_from_faiss,
+    analyze_local_context,
+    compose_answer_with_policy,
+)
 from .eval_utils import maybe_post_feedback_async, POST_FEEDBACK_ENABLED
 
 logger = logging.getLogger("interview_agent.lg_controller")
@@ -84,6 +90,60 @@ class LGController:
             retry_config = {}
             return _invoke_agent_with_trace(self.agent, input_state, retry_config)
 
+    @staticmethod
+    def _invoke_tool_safely(tool_obj, payload):
+        try:
+            return tool_obj.invoke(payload)
+        except Exception:
+            if isinstance(payload, dict) and "query" in payload:
+                return tool_obj.invoke(payload["query"])
+            raise
+
+    def _deterministic_fallback(self, question: str, latency_ms: float) -> Dict[str, Any]:
+        local_ctx = local_context_from_faiss(question, k=6)
+        routing = analyze_local_context(question, local_ctx)
+
+        tool_events = []
+        try:
+            local_chunks = self._invoke_tool_safely(retrieve_local_tool, {"query": question, "k": 6}) or ""
+        except Exception as exc:
+            local_chunks = f"[retrieve_local] error: {exc}"
+        tool_events.append({
+            "tool": "retrieve_local",
+            "input": {"query": question, "k": 6},
+            "observation": str(local_chunks),
+        })
+
+        web_results = ""
+        if routing.get("tentative_use_web"):
+            try:
+                web_results = self._invoke_tool_safely(TAVILY, {"query": question}) or ""
+            except Exception as exc:
+                web_results = f"[tavily_search] error: {exc}"
+            tool_events.append({
+                "tool": "tavily_search",
+                "input": {"query": question},
+                "observation": str(web_results),
+            })
+
+        answer = compose_answer_with_policy(
+            question=question,
+            local_context=local_ctx,
+            local_chunks=str(local_chunks),
+            web_results=web_results,
+            web_page="",
+        )
+        footnotes = footnotes_from_events(tool_events)
+        trace = {
+            "plan": "deterministic_fallback (local-first with optional web)",
+            "routing": {**routing, "final_use_web": bool(routing.get("tentative_use_web"))},
+            "tool_events": tool_events,
+            "local_context_preview": (local_ctx or "")[:800],
+            "controller": "deterministic_fallback_v1",
+            "latency_ms": latency_ms,
+        }
+        return {"answer": answer, "footnotes": footnotes, "trace": trace, "run_id": None}
+
     def respond(self, question: str) -> Dict[str, Any]:
         self.turn_index += 1
         logger.info("[LG] Q%d: %s", self.turn_index, question)
@@ -99,6 +159,9 @@ class LGController:
             result, traceable_run_id = self._invoke_with_recovery(input_state, config)
         except Exception as exc:
             logger.exception("[LG] Agent invocation failed: %s", exc)
+            if self._is_orphan_tool_message_error(exc):
+                latency_ms = (time.time() - start) * 1000.0
+                return self._deterministic_fallback(question, latency_ms)
             return {
                 "answer": f"Error: {exc}",
                 "footnotes": {},
