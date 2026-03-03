@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from services.ingest_index import ensure_index  # auto-build/load on boot
-from agent.lc_controller import LCController
 
 import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
@@ -194,18 +193,43 @@ _ensure_index_ready()
 
 # ---------- controller & state ----------
 def _init_controller():
+    class _ErrorController:
+        def __init__(self, msg: str):
+            self.msg = msg
+
+        def respond(self, question: str):
+            return {"answer": self.msg, "footnotes": {}, "trace": {"error": self.msg}}
+
     backend = os.getenv("AGENT_BACKEND", "langgraph").lower()
     if backend == "langchain":
         logger.info("Using legacy LangChain controller (AGENT_BACKEND=langchain).")
-        return LCController()
+        try:
+            from agent.lc_controller import LCController
+            return LCController()
+        except Exception as exc:
+            logger.exception("Legacy LangChain controller failed to initialize: %s", exc)
+            msg = f"Legacy LangChain backend failed: {exc}"
+            st.error(msg)
+            return _ErrorController(msg)
     try:
-        from agent.lg_controller import LGController
         logger.info("Using LangGraph controller (AGENT_BACKEND=%s).", backend)
+        from agent.lg_controller import LGController
         return LGController()
     except Exception as exc:
-        logger.exception("LangGraph controller failed to initialize, falling back to LangChain: %s", exc)
-        st.warning("LangGraph backend failed to initialize; falling back to legacy agent. Check logs for details.")
-        return LCController()
+        logger.exception("LangGraph controller failed to initialize, falling back to legacy agent: %s", exc)
+        st.warning("LangGraph backend failed to initialize; attempting legacy LangChain fallback.")
+        try:
+            from agent.lc_controller import LCController
+            return LCController()
+        except Exception as lc_exc:
+            logger.exception("Legacy LangChain controller also failed: %s", lc_exc)
+            msg = (
+                "Both agent backends failed to initialize.\n"
+                f"LangGraph error: {exc}\n"
+                f"LangChain error: {lc_exc}"
+            )
+            st.error(msg)
+            return _ErrorController(msg)
 
 
 if "controller" not in st.session_state:
