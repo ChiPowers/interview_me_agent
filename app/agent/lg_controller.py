@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, Callable, Dict, Optional
@@ -19,26 +20,16 @@ except Exception:  # pragma: no cover
     def get_current_run_tree():
         return None
 
-from .lg_state import AgentState
-try:
-    from .lg_nodes import (
-        prepare_local_context,
-        decide_retrieval_strategy,
-        route_after_decision,
-        retrieve_local_pass,
-        route_after_local_pass,
-        maybe_web_search_pass,
-    )
-except Exception:
-    from ._lg_nodes_deprecated import (
-        prepare_local_context,
-        decide_retrieval_strategy,
-        route_after_decision,
-        retrieve_local_pass,
-        route_after_local_pass,
-        maybe_web_search_pass,
-    )
-from .lg_utils import compose_answer_with_policy, compose_answer_with_policy_stream, footnotes_from_events
+from .lg_utils import (
+    local_context_from_faiss,
+    analyze_local_context,
+    should_use_web_judge,
+    multiquery_local_search,
+    compose_answer_with_policy,
+    compose_answer_with_policy_stream,
+    footnotes_from_events,
+)
+from .lc_tools import TAVILY, fetch_url_tool
 from .middleware import evaluate_answer_post
 from .eval_utils import maybe_post_feedback_async, POST_FEEDBACK_ENABLED
 
@@ -59,23 +50,74 @@ class LGController:
         self._last_trace: Optional[Dict[str, Any]] = None
         logger.info("LGController initialized (thread_id=%s)", self.thread_id)
 
-    def _run_retrieval_path(self, question: str) -> AgentState:
-        state: AgentState = {
-            "thread_id": self.thread_id,
-            "turn_index": self.turn_index,
-            "question": question,
-            "input": question,
-            "tool_events": [],
-        }
-        state = prepare_local_context(state)
-        state = decide_retrieval_strategy(state)
+    @staticmethod
+    def _tool_invoke(tool_obj, payload):
+        try:
+            return tool_obj.invoke(payload)
+        except Exception:
+            if isinstance(payload, dict) and "query" in payload:
+                return tool_obj.invoke(payload["query"])
+            raise
 
-        route = route_after_decision(state)
-        if route in ("local_only", "needs_web"):
-            state = retrieve_local_pass(state)
-            if route_after_local_pass(state) == "web":
-                state = maybe_web_search_pass(state)
-        return state
+    def _run_retrieval_path(self, question: str) -> Dict[str, Any]:
+        local_ctx = local_context_from_faiss(question, k=12)
+        routing = analyze_local_context(question, local_ctx)
+        needs_web = bool(routing.get("tentative_use_web"))
+        if routing.get("confidence") == "low":
+            try:
+                judge = should_use_web_judge(question, local_ctx)
+                needs_web = bool(judge.get("use_web"))
+                routing["judge_reason"] = judge.get("reason")
+            except Exception:
+                pass
+        routing["final_use_web"] = needs_web
+
+        rewrites = int(os.environ.get("LOCAL_RETRIEVAL_REWRITES", "2"))
+        mq = multiquery_local_search(question, rewrites=max(0, rewrites), k_per_query=4, top_k=10)
+        tool_events = list(mq.get("events", []))
+        if mq.get("rewrites"):
+            tool_events.append({
+                "tool": "rewrite_queries",
+                "input": {"question": question, "count": len(mq["rewrites"])},
+                "observation": mq["rewrites"],
+            })
+
+        web_results = None
+        web_page = ""
+        if needs_web:
+            try:
+                web_results = self._tool_invoke(TAVILY, {"query": question, "max_results": 3})
+            except Exception as exc:
+                web_results = {"error": str(exc)}
+            tool_events.append({
+                "tool": "tavily_search",
+                "input": {"query": question, "max_results": 3},
+                "observation": web_results,
+                "error": web_results.get("error") if isinstance(web_results, dict) else None,
+            })
+            if isinstance(web_results, dict):
+                hits = web_results.get("results") or []
+                if hits:
+                    url = hits[0].get("url")
+                    if url:
+                        try:
+                            web_page = fetch_url_tool.invoke({"url": url})
+                        except Exception as exc:
+                            web_page = f"[fetch_url] error: {exc}"
+                        tool_events.append({
+                            "tool": "fetch_url",
+                            "input": {"url": url},
+                            "observation": web_page,
+                        })
+
+        return {
+            "local_context": local_ctx,
+            "local_retrieval": mq.get("context", ""),
+            "routing": routing,
+            "tool_events": tool_events,
+            "web_results": web_results,
+            "web_page": web_page,
+        }
 
     @traceable(name="LGController.respond", run_type="chain")
     def respond(self, question: str, on_token: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
