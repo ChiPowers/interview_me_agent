@@ -9,6 +9,9 @@ import streamlit as st
 from PIL import Image
 from dotenv import load_dotenv
 
+# Load .env before importing app modules that initialize LLM/tracing internals.
+load_dotenv()
+
 from services.ingest_index import ensure_index  # auto-build/load on boot
 from agent.lc_controller import LCController
 
@@ -16,9 +19,17 @@ import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("interview_agent")
 
+# Log key presence (not value) to verify env wiring in deploys
+logger.info("OPENAI_API_KEY present: %s", bool(os.getenv("OPENAI_API_KEY")))
+
 
 # ---------- env & page ----------
-load_dotenv()
+# Support both tracing env names for compatibility across LangSmith/LangChain versions.
+if os.getenv("LANGSMITH_TRACING") and not os.getenv("LANGCHAIN_TRACING_V2"):
+    os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGSMITH_TRACING", "")
+if os.getenv("LANGCHAIN_TRACING_V2") and not os.getenv("LANGSMITH_TRACING"):
+    os.environ["LANGSMITH_TRACING"] = os.getenv("LANGCHAIN_TRACING_V2", "")
+
 st.set_page_config(
     page_title="Interview Chivon Powers",
     layout="centered",
@@ -160,7 +171,10 @@ with st.sidebar:
 # ---------- ensure index ready once ----------
 @st.cache_resource(show_spinner="Preparing search index…")
 def _ensure_index_ready():
-    ensure_index()
+    try:
+        ensure_index()
+    except Exception as exc:
+        logger.exception("Index initialization failed: %s", exc)
     return True
 _ensure_index_ready()
 
