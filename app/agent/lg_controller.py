@@ -20,14 +20,24 @@ except Exception:  # pragma: no cover
         return None
 
 from .lg_state import AgentState
-from .lg_nodes import (
-    prepare_local_context,
-    decide_retrieval_strategy,
-    route_after_decision,
-    retrieve_local_pass,
-    route_after_local_pass,
-    maybe_web_search_pass,
-)
+try:
+    from .lg_nodes import (
+        prepare_local_context,
+        decide_retrieval_strategy,
+        route_after_decision,
+        retrieve_local_pass,
+        route_after_local_pass,
+        maybe_web_search_pass,
+    )
+except Exception:
+    from ._lg_nodes_deprecated import (
+        prepare_local_context,
+        decide_retrieval_strategy,
+        route_after_decision,
+        retrieve_local_pass,
+        route_after_local_pass,
+        maybe_web_search_pass,
+    )
 from .lg_utils import compose_answer_with_policy, compose_answer_with_policy_stream, footnotes_from_events
 from .middleware import evaluate_answer_post
 from .eval_utils import maybe_post_feedback_async, POST_FEEDBACK_ENABLED
