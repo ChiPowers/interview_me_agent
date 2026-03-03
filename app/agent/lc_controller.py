@@ -12,7 +12,6 @@ import os
 import traceback
 from typing import Any, Dict, Optional
 
-from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -76,6 +75,7 @@ class LCController:
         if self.agent is not None:
             return
         try:
+            from langchain.agents import create_agent
             tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
             llm = ChatOpenAI(model=DEFAULT_LLM, temperature=0.2)
             self.agent = create_agent(
