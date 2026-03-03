@@ -39,6 +39,11 @@ class LGController:
         self._last_trace = None
         logger.info("LGController initialized (thread_id=%s, checkpoint=%s)", self.thread_id, self.checkpoint_path)
 
+    @staticmethod
+    def _is_orphan_tool_message_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "role 'tool'" in text and "tool_calls" in text
+
     def respond(self, question: str) -> Dict[str, Any]:
         self.turn_index += 1
         logger.info("[LG] Q%d: %s", self.turn_index, question)
@@ -53,12 +58,31 @@ class LGController:
         try:
             result = self.agent.invoke(input_state, config=config)
         except Exception as exc:
-            logger.exception("[LG] Agent invocation failed: %s", exc)
-            return {
-                "answer": f"Error: {exc}",
-                "footnotes": {},
-                "trace": {"error": str(exc)},
-            }
+            if self._is_orphan_tool_message_error(exc):
+                old_thread = self.thread_id
+                self.thread_id = str(uuid.uuid4())
+                logger.warning(
+                    "[LG] Recovered from orphan tool-message state. Rotating thread_id from %s to %s and retrying once.",
+                    old_thread,
+                    self.thread_id,
+                )
+                try:
+                    config = {"configurable": {"thread_id": self.thread_id}}
+                    result = self.agent.invoke(input_state, config=config)
+                except Exception as retry_exc:
+                    logger.exception("[LG] Retry after thread rotation failed: %s", retry_exc)
+                    return {
+                        "answer": f"Error: {retry_exc}",
+                        "footnotes": {},
+                        "trace": {"error": str(retry_exc)},
+                    }
+            else:
+                logger.exception("[LG] Agent invocation failed: %s", exc)
+                return {
+                    "answer": f"Error: {exc}",
+                    "footnotes": {},
+                    "trace": {"error": str(exc)},
+                }
         latency_ms = (time.time() - start) * 1000.0
 
         # Extract answer from last AI message
