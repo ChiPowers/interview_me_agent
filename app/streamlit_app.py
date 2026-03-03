@@ -25,7 +25,8 @@ def _hydrate_env_from_secrets() -> None:
         "LANGCHAIN_ENDPOINT": ["LANGCHAIN_ENDPOINT"],
     }
     try:
-        secrets = st.secrets
+        # Access can raise StreamlitSecretNotFoundError when no secrets.toml exists.
+        secrets = dict(st.secrets)
     except Exception:
         return
     for env_key, secret_keys in key_map.items():
