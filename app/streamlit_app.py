@@ -19,6 +19,7 @@ def _hydrate_env_from_secrets() -> None:
         "OPENAI_API_KEY": ["OPENAI_API_KEY"],
         "TAVILY_API_KEY": ["TAVILY_API_KEY", "TAVILY_KEY"],
         "LANGSMITH_API_KEY": ["LANGSMITH_API_KEY", "LANGSMITH_EVAL_API_KEY"],
+        "LANGSMITH_TRACING": ["LANGSMITH_TRACING"],
         "LANGCHAIN_TRACING_V2": ["LANGCHAIN_TRACING_V2"],
         "LANGCHAIN_PROJECT": ["LANGCHAIN_PROJECT"],
         "LANGCHAIN_ENDPOINT": ["LANGCHAIN_ENDPOINT"],
@@ -38,6 +39,16 @@ def _hydrate_env_from_secrets() -> None:
 
 
 _hydrate_env_from_secrets()
+
+# Normalize tracing env names across LangChain/LangSmith variants.
+if os.getenv("LANGSMITH_TRACING") and not os.getenv("LANGCHAIN_TRACING_V2"):
+    os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGSMITH_TRACING", "")
+if os.getenv("LANGCHAIN_TRACING_V2") and not os.getenv("LANGSMITH_TRACING"):
+    os.environ["LANGSMITH_TRACING"] = os.getenv("LANGCHAIN_TRACING_V2", "")
+if os.getenv("LANGSMITH_API_KEY"):
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    os.environ.setdefault("LANGCHAIN_PROJECT", "interview-me-agent")
 
 from services.ingest_index import ensure_index  # auto-build/load on boot
 
