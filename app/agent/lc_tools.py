@@ -34,8 +34,14 @@ def retrieve_local_tool(query: str, k: int = 6) -> str:
     if vs is None:
         return "[retrieve_local] No index loaded. Click (Re)Build Index in the app."
 
-    # Fan-out across rewrites for better recall, then merge results.
-    mq = multiquery_local_search(query, rewrites=3, k_per_query=max(2, k // 2), top_k=k)
+    # Fan-out rewrites can improve recall but adds an extra LLM call.
+    rewrites = int(os.getenv("LOCAL_RETRIEVAL_REWRITES", "0"))
+    mq = multiquery_local_search(
+        query,
+        rewrites=max(0, rewrites),
+        k_per_query=max(2, k // 2),
+        top_k=k,
+    )
 
     context = mq.get("context", "[retrieve_local] No results")
     rewrites = mq.get("rewrites") or []

@@ -7,6 +7,7 @@ middleware hooks that plug into ``create_agent``.
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any, Dict, List
 
@@ -30,6 +31,39 @@ from .lg_utils import (
 )
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
+ENABLE_WEB_JUDGE = os.getenv("ENABLE_WEB_JUDGE", "0").lower() in ("1", "true", "yes", "on")
+ENABLE_LLM_HALLUCINATION_GUARD = os.getenv("ENABLE_HALLUCINATION_GUARD", "1").lower() in ("1", "true", "yes", "on")
+MIN_CONTEXT_CHARS_FOR_GROUNDING = int(os.getenv("MIN_CONTEXT_CHARS_FOR_GROUNDING", "300"))
+
+
+def _tokenize(text: str) -> set[str]:
+    return set(re.findall(r"[a-zA-Z0-9]{4,}", (text or "").lower()))
+
+
+def _fast_grounding_risk_flags(answer: str, local_ctx: str, tool_event_count: int) -> List[str]:
+    flags: List[str] = []
+    a = (answer or "").strip()
+    c = (local_ctx or "").strip()
+
+    if not a:
+        return ["empty_answer"]
+    if c.startswith("[local] No index loaded.") or c.startswith("[local] error:"):
+        flags.append("no_local_evidence")
+    if len(c) < MIN_CONTEXT_CHARS_FOR_GROUNDING:
+        flags.append("thin_local_context")
+    if tool_event_count == 0:
+        flags.append("no_tool_evidence")
+    if not re.search(r"\[\d+\]", a):
+        flags.append("missing_citations")
+
+    answer_tokens = _tokenize(a)
+    ctx_tokens = _tokenize(c)
+    if answer_tokens and ctx_tokens:
+        overlap = len(answer_tokens & ctx_tokens) / max(1, len(answer_tokens))
+        if overlap < 0.12:
+            flags.append("low_context_overlap")
+
+    return flags
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +107,7 @@ class RAGRoutingMiddleware(AgentMiddleware):
         verdict = analyze_local_context(question, local_ctx)
         needs_web = verdict["tentative_use_web"]
 
-        if verdict["confidence"] == "low":
+        if verdict["confidence"] == "low" and ENABLE_WEB_JUDGE:
             judge = should_use_web_judge(question, local_ctx)
             needs_web = judge["use_web"]
 
@@ -151,9 +185,23 @@ class HallucinationGuardMiddleware(AgentMiddleware):
             elif isinstance(msg, dict) and msg.get("role") == "user":
                 question = msg.get("content", "")
 
-        guarded = guard_answer_with_evidence(question, answer, local_ctx)
-        if guarded != answer:
-            last_msg.content = guarded
+        tool_event_count = 0
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                tool_event_count += 1
+
+        risk_flags = _fast_grounding_risk_flags(answer, local_ctx, tool_event_count)
+        if "no_local_evidence" in risk_flags:
+            last_msg.content = (
+                "I don't have enough grounded local evidence to answer this accurately yet. "
+                "Please re-run indexing or share the relevant document section."
+            )
+            return None
+
+        if risk_flags and ENABLE_LLM_HALLUCINATION_GUARD:
+            guarded = guard_answer_with_evidence(question, answer, local_ctx)
+            if guarded != answer:
+                last_msg.content = guarded
 
         return None
 
