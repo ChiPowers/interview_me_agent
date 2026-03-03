@@ -1,7 +1,7 @@
 # agent/lc_tools.py
 from __future__ import annotations
-from typing import List, Optional
 import os
+from typing import List, Optional
 from pydantic import BaseModel, Field
 from langchain.tools import tool
 from tavily import TavilyClient
@@ -67,8 +67,6 @@ def tavily_search_tool(query: str) -> str:
         return str(resp)
     except Exception as exc:
         return f"[tavily_search] error: {exc}"
-
-
 TAVILY = tavily_search_tool
 
 

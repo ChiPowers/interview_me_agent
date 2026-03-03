@@ -16,12 +16,31 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
+try:
+    from langsmith import traceable
+    from langsmith.run_helpers import get_current_run_tree
+except Exception:  # pragma: no cover - optional dependency behavior
+    def traceable(*args, **kwargs):
+        def _deco(fn):
+            return fn
+        return _deco
+
+    def get_current_run_tree():
+        return None
 
 from .lg_graph import build_graph
 from .lg_utils import footnotes_from_events
 from .eval_utils import maybe_post_feedback_async, POST_FEEDBACK_ENABLED
 
 logger = logging.getLogger("interview_agent.lg_controller")
+
+
+@traceable(name="LGController.invoke", run_type="chain")
+def _invoke_agent_with_trace(agent, input_state, config):
+    result = agent.invoke(input_state, config=config)
+    run_tree = get_current_run_tree()
+    run_id = str(run_tree.id) if run_tree is not None else None
+    return result, run_id
 
 
 def _default_checkpoint_path() -> str:
@@ -77,7 +96,7 @@ class LGController:
 
         start = time.time()
         try:
-            result = self.agent.invoke(input_state, config=config)
+            result, traceable_run_id = _invoke_agent_with_trace(self.agent, input_state, config)
         except Exception as exc:
             if self._is_orphan_tool_message_error(exc):
                 old_thread = self.thread_id
@@ -90,7 +109,7 @@ class LGController:
                 try:
                     config = {"configurable": {"thread_id": self.thread_id}}
                     config["callbacks"] = [catcher]
-                    result = self.agent.invoke(input_state, config=config)
+                    result, traceable_run_id = _invoke_agent_with_trace(self.agent, input_state, config)
                 except Exception as retry_exc:
                     logger.exception("[LG] Retry after thread rotation failed: %s", retry_exc)
                     return {
@@ -139,7 +158,7 @@ class LGController:
         trace.setdefault("routing", result.get("routing"))
         trace.setdefault("local_context_preview", (result.get("local_context") or "")[:800])
         run_id_str = str(catcher.top_run_id) if catcher.top_run_id else None
-        trace["run_id"] = trace.get("run_id") or run_id_str
+        trace["run_id"] = trace.get("run_id") or run_id_str or traceable_run_id
         trace["controller"] = "create_agent_v1"
         trace["latency_ms"] = latency_ms
         self._last_trace = trace
