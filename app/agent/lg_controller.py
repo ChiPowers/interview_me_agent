@@ -64,6 +64,26 @@ class LGController:
         text = str(exc).lower()
         return "role 'tool'" in text and "tool_calls" in text
 
+    def _invoke_with_recovery(self, input_state: Dict[str, Any], config: Dict[str, Any]):
+        try:
+            return _invoke_agent_with_trace(self.agent, input_state, config)
+        except Exception as exc:
+            if not self._is_orphan_tool_message_error(exc):
+                raise
+
+            old_thread = self.thread_id
+            self.thread_id = str(uuid.uuid4())
+            logger.warning(
+                "[LG] Orphan tool-message error. Rotating thread_id from %s to %s and rebuilding a fresh non-checkpointed agent for one retry.",
+                old_thread,
+                self.thread_id,
+            )
+
+            # Rebuild a clean agent instance without checkpoint wiring for recovery.
+            self.agent = build_graph(checkpoint_path=None)
+            retry_config = {"configurable": {"thread_id": self.thread_id}}
+            return _invoke_agent_with_trace(self.agent, input_state, retry_config)
+
     def respond(self, question: str) -> Dict[str, Any]:
         self.turn_index += 1
         logger.info("[LG] Q%d: %s", self.turn_index, question)
@@ -76,33 +96,14 @@ class LGController:
 
         start = time.time()
         try:
-            result, traceable_run_id = _invoke_agent_with_trace(self.agent, input_state, config)
+            result, traceable_run_id = self._invoke_with_recovery(input_state, config)
         except Exception as exc:
-            if self._is_orphan_tool_message_error(exc):
-                old_thread = self.thread_id
-                self.thread_id = str(uuid.uuid4())
-                logger.warning(
-                    "[LG] Recovered from orphan tool-message state. Rotating thread_id from %s to %s and retrying once.",
-                    old_thread,
-                    self.thread_id,
-                )
-                try:
-                    config = {"configurable": {"thread_id": self.thread_id}}
-                    result, traceable_run_id = _invoke_agent_with_trace(self.agent, input_state, config)
-                except Exception as retry_exc:
-                    logger.exception("[LG] Retry after thread rotation failed: %s", retry_exc)
-                    return {
-                        "answer": f"Error: {retry_exc}",
-                        "footnotes": {},
-                        "trace": {"error": str(retry_exc)},
-                    }
-            else:
-                logger.exception("[LG] Agent invocation failed: %s", exc)
-                return {
-                    "answer": f"Error: {exc}",
-                    "footnotes": {},
-                    "trace": {"error": str(exc)},
-                }
+            logger.exception("[LG] Agent invocation failed: %s", exc)
+            return {
+                "answer": f"Error: {exc}",
+                "footnotes": {},
+                "trace": {"error": str(exc)},
+            }
         latency_ms = (time.time() - start) * 1000.0
 
         # Extract answer from last AI message
