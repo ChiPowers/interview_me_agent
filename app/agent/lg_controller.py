@@ -81,7 +81,7 @@ class LGController:
 
             # Rebuild a clean agent instance without checkpoint wiring for recovery.
             self.agent = build_graph(checkpoint_path=None)
-            retry_config = {"configurable": {"thread_id": self.thread_id}}
+            retry_config = {}
             return _invoke_agent_with_trace(self.agent, input_state, retry_config)
 
     def respond(self, question: str) -> Dict[str, Any]:
@@ -92,7 +92,7 @@ class LGController:
         input_state = {
             "messages": [{"role": "user", "content": question}],
         }
-        config = {"configurable": {"thread_id": self.thread_id}}
+        config = {}
 
         start = time.time()
         try:
