@@ -4,13 +4,13 @@ services:
     env: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run app/streamlit_app.py --server.port $PORT --server.address 0.0.0.0
-    healthCheckPath: /
+    startCommand: uvicorn app.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: AGENT_BACKEND
-        value: langchain
+        value: langgraph
       - key: OPENAI_API_KEY
         sync: false
       - key: TAVILY_API_KEY
@@ -21,3 +21,4 @@ services:
         value: "true"
       - key: LANGCHAIN_PROJECT
         value: "interview-me-agent"
+    autoDeploy: true

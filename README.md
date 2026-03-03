@@ -16,8 +16,18 @@ A conversational AI agent app that lets people ask questions about my work exper
 1. `pip install -r requirements.txt`
 2. Copy `.env.example` → `.env` and fill keys (OpenAI, Tavily, LangSmith optional).
 3. Put your PDFs into `data/raw/`.
-4. `streamlit run app/streamlit_app.py`
-5. Use **(Re)Build Index** to (re)create FAISS.
+4. `uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload`
+5. Call `POST /chat` or `GET /chat/stream?question=...`.
+6. Use `python -m app.services.ingest_index --rebuild` when documents change.
+
+## FastAPI (Alternative)
+- Run API server: `uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload`
+- Health: `GET /healthz`
+- JSON chat: `POST /chat` with body `{"question":"..."}`
+- Streaming chat (SSE): `GET /chat/stream?question=...`
+
+## Streamlit (Legacy UI)
+- Streamlit remains available for local testing: `streamlit run app/streamlit_app.py`
 
 ## Notes
 - Local-first retrieval; Tavily fallback only if needed.

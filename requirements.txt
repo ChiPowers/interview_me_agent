@@ -1,6 +1,8 @@
 # Core runtime
 python-dotenv>=1.0
 streamlit>=1.36
+fastapi>=0.115
+uvicorn[standard]>=0.30
 openai>=1.40
 Pillow>=10.4
 numpy>=1.26
