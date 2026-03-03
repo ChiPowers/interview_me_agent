@@ -32,6 +32,71 @@ from .lg_utils import (
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
 
 
+def _sanitize_tool_message_sequence(messages: List[Any]) -> tuple[List[Any], int]:
+    """
+    Drop orphan tool messages that are not paired to a preceding assistant tool call.
+
+    OpenAI rejects payloads where a `tool` role message appears without a matching
+    immediately-prior assistant tool call chain.
+    """
+    cleaned: List[Any] = []
+    removed = 0
+    pending_ids: set[str] = set()
+    pending_count = 0
+
+    for msg in messages:
+        msg_type = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else "")
+
+        if msg_type in ("ai", "assistant"):
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls is None and isinstance(msg, dict):
+                tool_calls = msg.get("tool_calls")
+
+            pending_ids = set()
+            pending_count = 0
+            for tc in (tool_calls or []):
+                tc_id = None
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id")
+                else:
+                    tc_id = getattr(tc, "id", None)
+                if tc_id:
+                    pending_ids.add(str(tc_id))
+                else:
+                    pending_count += 1
+
+            cleaned.append(msg)
+            continue
+
+        if msg_type == "tool":
+            tool_call_id = getattr(msg, "tool_call_id", None)
+            if tool_call_id is None and isinstance(msg, dict):
+                tool_call_id = msg.get("tool_call_id")
+            tool_call_id = str(tool_call_id) if tool_call_id else None
+
+            valid = False
+            if tool_call_id and tool_call_id in pending_ids:
+                pending_ids.remove(tool_call_id)
+                valid = True
+            elif not tool_call_id and pending_count > 0:
+                pending_count -= 1
+                valid = True
+
+            if valid:
+                cleaned.append(msg)
+            else:
+                removed += 1
+            continue
+
+        # Non-tool turn breaks any pending tool-call chain.
+        if msg_type in ("human", "user", "system"):
+            pending_ids = set()
+            pending_count = 0
+        cleaned.append(msg)
+
+    return cleaned, removed
+
+
 # ---------------------------------------------------------------------------
 # 1. Local-context pre-fetch & routing middleware (class-based)
 # ---------------------------------------------------------------------------
@@ -53,6 +118,11 @@ class RAGRoutingMiddleware(AgentMiddleware):
         messages = request.state.get("messages", [])
         if not messages:
             return handler(request)
+
+        cleaned_messages, removed_count = _sanitize_tool_message_sequence(messages)
+        if removed_count:
+            request.state["messages"] = cleaned_messages
+            messages = cleaned_messages
 
         # Extract latest user question
         question = ""
