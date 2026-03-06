@@ -19,6 +19,17 @@ from app.agent.lg_controller import LGController
 
 load_dotenv()
 
+# Normalize LangSmith/LangChain tracing env vars so both old and new SDK versions activate.
+import os as _os
+if _os.getenv("LANGSMITH_API_KEY"):
+    _os.environ.setdefault("LANGSMITH_TRACING", "true")
+    _os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    _os.environ.setdefault("LANGCHAIN_PROJECT", "interview-me-agent")
+if _os.getenv("LANGCHAIN_TRACING_V2") and not _os.getenv("LANGSMITH_TRACING"):
+    _os.environ["LANGSMITH_TRACING"] = _os.getenv("LANGCHAIN_TRACING_V2", "")
+if _os.getenv("LANGSMITH_TRACING") and not _os.getenv("LANGCHAIN_TRACING_V2"):
+    _os.environ["LANGCHAIN_TRACING_V2"] = _os.getenv("LANGSMITH_TRACING", "")
+
 # Embed logo as base64 so it works without static file serving
 def _load_logo_b64() -> str:
     candidates = [
