@@ -71,8 +71,8 @@ def _load_pdfs(pdf_dir: Path) -> list:
 
 
 def _split_and_label(docs: list) -> list:
-    # Larger chunks preserve semantic context and improve retrieval quality.
-    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+    # Larger chunks preserve more context per retrieved passage.
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
     chunks = splitter.split_documents(docs)
     # Add friendly labels (used in citations)
     for c in chunks:

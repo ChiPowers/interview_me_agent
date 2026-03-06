@@ -60,7 +60,7 @@ class LGController:
             raise
 
     def _run_retrieval_path(self, question: str) -> Dict[str, Any]:
-        local_ctx = local_context_from_faiss(question, k=12)
+        local_ctx = local_context_from_faiss(question, k=15)
         routing = analyze_local_context(question, local_ctx)
         needs_web = bool(routing.get("tentative_use_web"))
         if routing.get("confidence") == "low":

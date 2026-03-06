@@ -20,19 +20,19 @@ def _filter_scored_docs(scored_docs, min_docs: int = 4):
     lower_is_better = scores[0] <= scores[-1]
     if lower_is_better:
         best = min(scores)
-        # Keep a broader tail to preserve potentially relevant recent/patent chunks.
-        thresh = 0.35 if best <= 0 else best * 2.5
+        # Wider threshold so we keep more potentially relevant chunks.
+        thresh = 0.50 if best <= 0 else best * 4.0
         filtered = [(d, s) for d, s in scored_docs if s <= thresh]
     else:
         best = max(scores)
-        thresh = best / 2.5 if best else 0
+        thresh = best / 4.0 if best else 0
         filtered = [(d, s) for d, s in scored_docs if s >= thresh]
     if len(filtered) < min_docs:
         return scored_docs[:min_docs]
     return filtered
 
 
-def local_context_from_faiss(question: str, k: int = 6) -> str:
+def local_context_from_faiss(question: str, k: int = 10) -> str:
     vs = load_faiss_or_none()
     if vs is None:
         return "[local] No index loaded."
@@ -87,8 +87,8 @@ def rewrite_queries(question: str, n: int = 3) -> List[str]:
 def multiquery_local_search(
     question: str,
     rewrites: int = 3,
-    k_per_query: int = 3,
-    top_k: int = 6,
+    k_per_query: int = 6,
+    top_k: int = 12,
 ) -> Dict[str, Any]:
     """
     Fan-out FAISS retrieval across multiple rewrites, dedupe, and return a merged context.
@@ -280,16 +280,11 @@ def compose_answer_with_policy(
 
     combined_context = "\n\n---\n\n".join(context_sections) if context_sections else "No supporting context."
 
-    policy = (
-        "Answer strictly in first person, professional tone. "
-        "Limit to ≤3 sentences and ≤90 words. "
-        "Reference the provided context and mark citations with [1], [2]."
-    )
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM + "\n" + policy),
+        ("system", SYSTEM),
         ("human", "Question: {question}\n\nContext:\n{context}"),
     ])
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o"), temperature=0.2)
     return llm.invoke(prompt.format_messages(question=question, context=combined_context)).content.strip()
 
 
@@ -342,16 +337,11 @@ def compose_answer_with_policy_stream(
     Yields text chunks from the model stream, then returns final full text via StopIteration value.
     """
     combined_context = build_combined_context(local_context, local_chunks, web_results, web_page)
-    policy = (
-        "Answer strictly in first person, professional tone. "
-        "Limit to <=3 sentences and <=90 words. "
-        "Reference the provided context and mark citations with [1], [2]."
-    )
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM + "\n" + policy),
+        ("system", SYSTEM),
         ("human", "Question: {question}\n\nContext:\n{context}"),
     ])
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o"), temperature=0.2)
     full_text_parts: List[str] = []
     for chunk in llm.stream(prompt.format_messages(question=question, context=combined_context)):
         text = _extract_chunk_text(chunk)
@@ -427,10 +417,15 @@ def analyze_local_context(question: str, local_ctx: str) -> Dict[str, Any]:
     if any(w in q_low for w in OPEN_WEB_HINTS):
         reasons.append("open_web_intent")
 
-    use_web = len(reasons) > 0
+    # Require stronger evidence before going to web — local docs should cover most profile Qs.
+    use_web = hard or (
+        ("freshness_cue" in reasons or "open_web_intent" in reasons)
+        or (("local_context_too_small" in reasons or "too_few_chunks" in reasons)
+            and len(reasons) >= 2)
+    )
     confident = hard or (
-        (("local_context_too_small" in reasons or "too_few_chunks" in reasons)
-         and ("freshness_cue" in reasons or "open_web_intent" in reasons))
+        ("freshness_cue" in reasons or "open_web_intent" in reasons)
+        and ("local_context_too_small" in reasons or "too_few_chunks" in reasons)
     )
     confidence = "high" if confident else "low"
 
