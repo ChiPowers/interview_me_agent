@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import queue
 import threading
+from pathlib import Path
 from typing import Any, Dict, Generator, Optional
 
 from dotenv import load_dotenv
@@ -16,6 +18,19 @@ from app.services.ingest_index import ensure_index
 from app.agent.lg_controller import LGController
 
 load_dotenv()
+
+# Embed logo as base64 so it works without static file serving
+def _load_logo_b64() -> str:
+    candidates = [
+        Path(__file__).parent.parent / "static" / "logotat.png",
+        Path(__file__).parent.parent.parent / "static" / "logotat.png",
+    ]
+    for p in candidates:
+        if p.exists():
+            return base64.b64encode(p.read_bytes()).decode()
+    return ""
+
+_LOGO_B64 = _load_logo_b64()
 
 logger = logging.getLogger("interview_agent.api")
 logging.basicConfig(level="INFO")
@@ -53,37 +68,104 @@ def healthz() -> Dict[str, str]:
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
-    return """
+    logo_tag = (
+        f'<img src="data:image/png;base64,{_LOGO_B64}" alt="logo" style="width:150px;margin-bottom:16px;" />'
+        if _LOGO_B64 else ""
+    )
+    return f"""
 <!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Interview Agent</title>
+    <title>Interview Chivon Powers</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#f7f8fb; margin:0; }
-      .wrap { max-width: 860px; margin: 24px auto; padding: 0 16px; }
-      .card { background: white; border:1px solid #e6e8ef; border-radius:14px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.04); }
-      h1 { font-size: 24px; margin: 0 0 8px; }
-      .sub { color:#59627a; margin-bottom:14px; }
-      .row { display:flex; gap:10px; }
-      input { flex:1; padding:12px; border-radius:10px; border:1px solid #c9cfe0; font-size:15px; }
-      button { padding:12px 16px; border-radius:10px; border:none; background:#1f5cff; color:white; font-weight:600; cursor:pointer; }
-      button:disabled { opacity:.5; cursor:not-allowed; }
-      #answer { white-space: pre-wrap; line-height: 1.45; margin-top:12px; min-height: 40px; }
-      .meta { color:#6b7280; font-size:13px; margin-top:8px; }
-      .error { color:#b42318; }
+      *, *::before, *::after {{ box-sizing: border-box; }}
+      body {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #ffffff;
+        margin: 0;
+        color: #333;
+      }}
+      .wrap {{
+        max-width: 700px;
+        margin: 48px auto;
+        padding: 0 24px;
+        text-align: center;
+      }}
+      h1 {{
+        font-size: 2.4rem;
+        font-weight: 800;
+        color: #4B0082;
+        margin: 0 0 12px;
+      }}
+      .sub {{
+        color: #555;
+        font-size: 15px;
+        line-height: 1.6;
+        margin-bottom: 32px;
+      }}
+      .card {{
+        background: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 12px;
+        padding: 24px 28px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+        text-align: left;
+      }}
+      .card label {{
+        display: block;
+        font-size: 14px;
+        color: #333;
+        margin-bottom: 8px;
+      }}
+      input {{
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 6px;
+        border: 2px solid #4B0082;
+        font-size: 15px;
+        outline: none;
+        color: #333;
+      }}
+      input:focus {{
+        box-shadow: 0 0 0 3px rgba(75,0,130,0.12);
+      }}
+      button {{
+        margin-top: 12px;
+        padding: 8px 20px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        background: #fff;
+        color: #333;
+        font-size: 14px;
+        cursor: pointer;
+      }}
+      button:hover {{ background: #f5f5f5; }}
+      button:disabled {{ opacity: .5; cursor: not-allowed; }}
+      #answer {{
+        white-space: pre-wrap;
+        line-height: 1.6;
+        margin-top: 20px;
+        font-size: 16px;
+        min-height: 0;
+      }}
+      .meta {{ color: #9ca3af; font-size: 12px; margin-top: 8px; }}
+      .error {{ color: #b42318; }}
     </style>
   </head>
   <body>
     <div class="wrap">
+      {logo_tag}
+      <h1>Interview Chivon Powers</h1>
+      <p class="sub">
+        This bot responds as me, using my resume and other documents to answer your interview questions.<br/>
+        It's a practical demonstration of my AI product development skills and a fun way to learn about my work experience.
+      </p>
       <div class="card">
-        <h1>Interview Agent</h1>
-        <div class="sub">Ask about Chivon's background. Responses stream live.</div>
-        <div class="row">
-          <input id="q" placeholder="How does your background fit a principal applied scientist role?" />
-          <button id="ask">Ask</button>
-        </div>
+        <label for="q">Enter your interview question:</label>
+        <input id="q" placeholder="How has your experience prepared you for a role in AI?" />
+        <button id="ask">Ask the Question</button>
         <div id="answer"></div>
         <div id="meta" class="meta"></div>
       </div>
@@ -95,11 +177,11 @@ def home() -> str:
       const meta = document.getElementById("meta");
       let es = null;
 
-      function closeStream() {
-        if (es) { es.close(); es = null; }
-      }
+      function closeStream() {{
+        if (es) {{ es.close(); es = null; }}
+      }}
 
-      function ask() {
+      function ask() {{
         const q = input.value.trim();
         if (!q) return;
         closeStream();
@@ -108,31 +190,31 @@ def home() -> str:
         meta.classList.remove("error");
         btn.disabled = true;
 
-        es = new EventSource(`/chat/stream?question=${encodeURIComponent(q)}`);
-        es.addEventListener("token", (evt) => {
+        es = new EventSource(`/chat/stream?question=${{encodeURIComponent(q)}}`);
+        es.addEventListener("token", (evt) => {{
           answer.textContent += JSON.parse(evt.data);
-        });
-        es.addEventListener("final", (evt) => {
+        }});
+        es.addEventListener("final", (evt) => {{
           const payload = JSON.parse(evt.data);
-          const trace = payload.trace || {};
-          const latency = trace.latency_ms ? `${Math.round(trace.latency_ms)} ms` : "n/a";
+          const trace = payload.trace || {{}};
+          const latency = trace.latency_ms ? `${{Math.round(trace.latency_ms)}} ms` : "n/a";
           const tools = (trace.tool_events || []).length;
-          meta.textContent = `Done • latency: ${latency} • tools: ${tools}`;
-        });
-        es.addEventListener("error", (evt) => {
+          meta.textContent = `Done • latency: ${{latency}} • tools: ${{tools}}`;
+        }});
+        es.addEventListener("error", (evt) => {{
           meta.textContent = "Stream error. Try again.";
           meta.classList.add("error");
           btn.disabled = false;
           closeStream();
-        });
-        es.addEventListener("done", () => {
+        }});
+        es.addEventListener("done", () => {{
           btn.disabled = false;
           closeStream();
-        });
-      }
+        }});
+      }}
 
       btn.addEventListener("click", ask);
-      input.addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
+      input.addEventListener("keydown", (e) => {{ if (e.key === "Enter") ask(); }});
     </script>
   </body>
 </html>
