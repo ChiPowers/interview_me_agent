@@ -33,6 +33,7 @@ class AgentState(TypedDict, total=False):
 
     # conversation scaffolding (LangChain/ChatML messages)
     chat_history: List[Any]
+    messages: List[Any]
     scratchpad: List[Any]
 
     # tool traces
@@ -42,6 +43,13 @@ class AgentState(TypedDict, total=False):
     answer: str
     output: str  # alias for answer
     footnotes: Dict[int, Dict[str, str]]
+    sources: List[Dict[str, Any]]
+    source_freshness: Dict[str, Any]
+    validation: Dict[str, Any]
     trace: Dict[str, Any]
     eval: Dict[str, Any]
     error: Optional[str]
+
+
+class InterviewState(AgentState):
+    """State contract consumed by the canonical LangGraph adapter."""

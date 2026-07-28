@@ -2,9 +2,8 @@
 """
 Legacy LCController — updated to use LangChain v1 ``create_agent``.
 
-Provides the same ``respond(question) → {answer, footnotes, trace}`` API.
-Set AGENT_BACKEND=langchain to use this controller instead of the default
-LGController (which adds checkpointing and middleware).
+Provides the historical ``respond(question)`` behavior for temporary regression
+comparisons. Production surfaces use ``LGController`` exclusively.
 """
 from __future__ import annotations
 
@@ -27,9 +26,10 @@ from .eval_utils import (
     POST_FEEDBACK_SAMPLE_RATE,
     maybe_post_feedback_async,
 )
+from app.services.settings import GENERATION_MODEL
 
 # --- Config ---
-DEFAULT_LLM = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
+DEFAULT_LLM = GENERATION_MODEL
 COMPOSER_LLM = os.getenv("OPENAI_COMPOSER_MODEL", DEFAULT_LLM)
 
 # Optional: quick sanity log
@@ -44,9 +44,7 @@ POLICY = (
     "\nPolicy:\n"
     "1) Use the Local context below first. If insufficient, then tools in order: "
     "retrieve_local → tavily_search → fetch_url.\n"
-    "2) Keep answers ≤ 3 sentences (≤ 90 words), first person, professional only.\n"
-    "3) Add footnote markers [1], [2]. Cite local labels like "
-    "'local • <file> p.<n>' and real URLs for web.\n"
+    "2) Follow the single response policy in the system prompt.\n"
 )
 
 
@@ -77,7 +75,7 @@ class LCController:
             return
         try:
             tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
-            llm = ChatOpenAI(model=DEFAULT_LLM, temperature=0.2)
+            llm = ChatOpenAI(model=DEFAULT_LLM)
             self.agent = create_agent(
                 model=llm,
                 tools=tools,

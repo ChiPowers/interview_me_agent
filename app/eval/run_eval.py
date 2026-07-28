@@ -1,18 +1,33 @@
 # app/eval/run_eval.py
 from __future__ import annotations
-import os, time, json, csv, warnings, traceback
-from pathlib import Path
-from typing import Dict, Any, List, Optional
+import csv
+import json
+import logging
 import os
+import time
+import traceback
+import warnings
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from langsmith import Client
+
+from ..agent.lg_controller import LGController
+from .evaluators import EvalInput, default_eval_suite
+
+load_dotenv()
 
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_EVAL_API_KEY", "")
 LANGCHAIN_ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
 PROJECT = os.getenv("LANGCHAIN_PROJECT", "evaluators")
 
-client = Client(api_key=LANGSMITH_API_KEY, api_url=LANGCHAIN_ENDPOINT)
+langsmith_client = (
+    Client(api_key=LANGSMITH_API_KEY, api_url=LANGCHAIN_ENDPOINT)
+    if LANGSMITH_API_KEY
+    else None
+)
 
 # ------------------------------- Config --------------------------------
 REPO = Path(__file__).resolve().parents[2]
@@ -22,8 +37,6 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 POST_FEEDBACK = os.getenv("POST_FEEDBACK", "0") in ("1", "true", "yes")
 
-# ---- Minimal, controlled logging before imports that emit warnings ----
-import logging
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
 log = logging.getLogger("eval")
 logging.getLogger("langsmith.client").setLevel(logging.ERROR)
@@ -32,12 +45,6 @@ logging.getLogger("langsmith.client").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"langchain.*")
 warnings.filterwarnings("ignore", category=UserWarning, module=r"langchain.*")
 warnings.filterwarnings("ignore", category=UserWarning, module=r"openai.*")
-
-from ..agent.lc_controller import LCController
-from .evaluators import EvalInput, default_eval_suite
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # ----------------------------- Utilities -------------------------------
 def load_golden(path: Path) -> List[Dict[str, Any]]:
@@ -68,6 +75,35 @@ def safe_default_eval_suite(ei: EvalInput, latency_ms: Optional[float]) -> List[
         log.debug("Evaluator traceback:\n%s", traceback.format_exc())
         # Return minimal signal so the row is not lost
         return [{"name": "eval_error", "score": 0.0, "reason": f"{type(e).__name__}: {e}"}]
+
+
+def eval_input_from_output(
+    question: str,
+    reference: Optional[str],
+    output: Dict[str, Any],
+) -> EvalInput:
+    """Preserve the controller's retrieval/source contract for source alignment."""
+    trace = output.get("trace") or {}
+    retrieval = trace.get("retrieval") or {}
+    return EvalInput(
+        question=question,
+        answer=(output.get("answer") or "").strip(),
+        context=trace.get("local_context_preview") or "",
+        footnotes=(
+            output.get("footnotes")
+            if isinstance(output.get("footnotes"), dict)
+            else {}
+        ),
+        reference=reference,
+        sources=output.get("sources") or [],
+        retrieved_evidence_ids=[
+            item["id"]
+            for item in retrieval.get("evidence") or []
+            if isinstance(item, dict) and item.get("id")
+        ],
+        abstained=bool(trace.get("refusal")),
+    )
+
 
 def make_langsmith_client() -> Optional[Client]:
     if not (POST_FEEDBACK and LANGSMITH_API_KEY):
@@ -117,7 +153,7 @@ def main():
 
     # Controller (agent) – ensure it won’t trace unless you explicitly enabled it
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
-    controller = LCController()
+    controller = LGController(include_context_in_trace=True)
 
     # Progress UI
     results = []
@@ -139,22 +175,14 @@ def main():
         answer = (out.get("answer") or "").strip()
         footnotes = out.get("footnotes") or {}
         trace = out.get("trace") or {}
-        run_id = out.get("run_id")  # make sure LCController.respond() returns this
+        run_id = trace.get("run_id")
 
-        local_ctx = trace.get("local_context_preview") or ""
-        ei = EvalInput(
-            question=q,
-            answer=answer,
-            context=local_ctx,
-            footnotes=footnotes if isinstance(footnotes, dict) else {},
-            reference=ref,
-        )
+        ei = eval_input_from_output(q, ref, out)
         metrics = safe_default_eval_suite(ei, latency_ms=latency_ms)
 
-        run_id = out.get("run_id")  # from LCController.respond if tracer worked
-        if not run_id:
+        if not run_id and langsmith_client:
             try:
-                created = client.create_run(
+                created = langsmith_client.create_run(
                     name="batch-eval-4o-mini",
                     run_type="chain",
                     project_name=PROJECT,
@@ -171,10 +199,10 @@ def main():
                 run_id = None
 
         # Optionally attach all metric feedback
-        if POST_FEEDBACK and run_id:
+        if POST_FEEDBACK and run_id and langsmith_client:
             for m in metrics:
                 try:
-                    client.create_feedback(
+                    langsmith_client.create_feedback(
                         run_id=run_id,
                         key=m["name"],
                         score=m.get("score") if isinstance(m.get("score"), (int, float)) else None,
@@ -191,16 +219,11 @@ def main():
             "latency_ms": round(latency_ms, 1),
             "metrics": metrics,
             "footnotes": footnotes,
-            "trace_excerpt": trace.get("steps", [])[:3],
+            "retrieval": trace.get("retrieval", {}),
             "run_id": run_id,
         }
         results.append(row_out)
 
-        # Compact console line
-        try:
-            score_summary = {m["name"]: m["score"] for m in metrics}
-        except Exception:
-            score_summary = {}
         log.info("[%d] %.1f ms | %s", i, row_out["latency_ms"], q[:70])
 
     # Outputs
@@ -220,10 +243,10 @@ def main():
     log.info("Wrote %s", csv_path)
 
     # Optional feedback to LangSmith (quiet if no key or disabled)
-    client = make_langsmith_client()
-    if client and POST_FEEDBACK:
+    feedback_client = make_langsmith_client()
+    if feedback_client and POST_FEEDBACK:
         log.info("Feedback posting to LangSmith is ENABLED.")
-        post_feedback_batch(client, results)
+        post_feedback_batch(feedback_client, results)
     else:
         log.info("Feedback posting DISABLED (set POST_FEEDBACK=1 and a valid LANGSMITH_API_KEY to enable).")
 

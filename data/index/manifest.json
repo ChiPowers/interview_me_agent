@@ -1,0 +1,14 @@
+{
+  "manifest_version": 2,
+  "chunking_version": "structured-v1",
+  "embedding_model": "text-embedding-3-large",
+  "sources": {
+    "pdf/Chivon Powers Projects.pdf": "b686aaaa1ac5bb467093fbc5079503bf933cbc63991e2650b976eb2f7dc6b070",
+    "pdf/Chivon Powers_CV.pdf": "5f4fe2da15d6e9dd7bd90d962409543195b79613bfc73e1d59093e5d530b02dc",
+    "pdf/Chivon Powers_Personal Statement.pdf": "cc23c992869661abff80ab9d0b0a214ab73b8fa7eb8ee6d6fd1c7c26894207ba",
+    "pdf/ChivonPowers - Applied DS AI Engineer_7_26.pdf": "cdbcbbfd5fb3b9f9304606cf20dfaacaf55e3a57b3a26192de85b31e58fb2506",
+    "profile/linkedin_profile.json": "f7a201a710c137bf80b75ad958957eb3c88ac14aae51901a4fc347bf21784f2c"
+  },
+  "built_at": "2026-07-28T16:02:38.251377+00:00",
+  "chunk_count": 50
+}

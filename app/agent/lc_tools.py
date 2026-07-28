@@ -1,13 +1,20 @@
 # agent/lc_tools.py
 from __future__ import annotations
+import json
 import os
-from typing import List, Optional
+from typing import Any
 from pydantic import BaseModel, Field
 from langchain.tools import tool
 from tavily import TavilyClient
-from services.web_fetch import fetch_and_clean
-from services.vectorstore import load_faiss_or_none
-from agent.lg_utils import multiquery_local_search
+
+try:
+    from app.services.web_fetch import fetch_and_clean
+    from app.services.vectorstore import load_faiss_or_none
+except ModuleNotFoundError:
+    from services.web_fetch import fetch_and_clean
+    from services.vectorstore import load_faiss_or_none
+
+from .lg_utils import multiquery_local_search
 
 
 # -----------------------------
@@ -56,23 +63,56 @@ def retrieve_local_tool(query: str, k: int = 6) -> str:
 # -----------------------------
 # This tool emits JSON-like search results (title, url, content) by default.
 # Requires TAVILY_API_KEY in the environment.
-@tool("tavily_search")
-def tavily_search_tool(query: str) -> str:
-    """Search the web via Tavily and return JSON-like results."""
+def search_web(query: str, max_results: int = 3) -> dict[str, Any]:
+    """Return a stable, structured Tavily result contract."""
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
-        return "[tavily_search] unavailable (missing TAVILY_API_KEY)"
+        return {
+            "query": query,
+            "results": [],
+            "answer": None,
+            "error": "missing_tavily_api_key",
+        }
     try:
         client = TavilyClient(api_key=api_key)
         resp = client.search(
             query=query,
-            max_results=3,
+            max_results=max(1, min(max_results, 5)),
             include_answer=True,
             include_raw_content=False,
         )
-        return str(resp)
+        results = []
+        for item in (resp or {}).get("results") or []:
+            results.append(
+                {
+                    "title": str(item.get("title") or "Web result"),
+                    "url": str(item.get("url") or ""),
+                    "content": str(item.get("content") or ""),
+                    "score": item.get("score"),
+                    "published_date": item.get("published_date"),
+                }
+            )
+        return {
+            "query": query,
+            "results": results,
+            "answer": (resp or {}).get("answer"),
+            "error": None,
+        }
     except Exception as exc:
-        return f"[tavily_search] error: {exc}"
+        return {
+            "query": query,
+            "results": [],
+            "answer": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+@tool("tavily_search")
+def tavily_search_tool(query: str) -> str:
+    """Search the web via Tavily and return structured JSON."""
+    return json.dumps(search_web(query), ensure_ascii=False)
+
+
 TAVILY = tavily_search_tool
 
 
