@@ -17,7 +17,6 @@ from pydantic import BaseModel
 
 from app.services.ingest_index import ensure_index, index_status
 from app.agent.lg_controller import LGController
-from app.services.settings import LINKEDIN_PROFILE_URL
 
 load_dotenv()
 
@@ -134,26 +133,6 @@ def home() -> str:
         line-height: 1.6;
         margin-bottom: 32px;
       }}
-      .current-badge {{
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        margin: 0 0 24px;
-        padding: 7px 12px;
-        border-radius: 999px;
-        background: #f2ebf8;
-        color: #4B0082;
-        font-size: 13px;
-        font-weight: 700;
-        text-decoration: none;
-      }}
-      .current-badge::before {{
-        content: "";
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #36c275;
-      }}
       .card {{
         background: white;
         border: 1px solid #e0e0e0;
@@ -239,7 +218,6 @@ def home() -> str:
         Ask about my work across AI, data science, product, and research.<br/>
         Answers are grounded in approved professional sources and shaped with an evaluation-first mindset.
       </p>
-      <a class="current-badge" href="{LINKEDIN_PROFILE_URL}" target="_blank" rel="noreferrer">Currently at Lime · Senior Data Scientist, Payments &amp; Fraud</a>
       <div class="card">
         <label for="q">Enter your interview question:</label>
         <input id="q" placeholder="How has your experience prepared you for a role in AI?" />

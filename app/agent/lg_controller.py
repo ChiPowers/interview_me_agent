@@ -260,8 +260,9 @@ def validate_answer(answer: str, source_count: int) -> dict[str, Any]:
 
 
 def hide_inline_citations(answer: str) -> str:
-    """Remove model-generated citation markers; sources render separately."""
+    """Normalize visible answer text; sources render separately."""
     cleaned = _INLINE_CITATION_RE.sub("", answer or "")
+    cleaned = cleaned.replace("—", ", ").replace("–", "-")
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"[ \t]+([,.;:!?])", r"\1", cleaned)
     return cleaned.strip()
@@ -384,7 +385,7 @@ class LGController:
                     for item in content
                     if isinstance(item, dict)
                 )
-            token = str(content or "")
+            token = str(content or "").replace("—", ", ").replace("–", "-")
             if not token:
                 continue
             if first_token_ms is None:

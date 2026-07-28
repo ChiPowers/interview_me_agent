@@ -40,14 +40,16 @@ class _FakeController:
 class ControllerApiTests(unittest.TestCase):
     def test_inline_citations_are_hidden_from_answer_text(self):
         answer = (
-            "I built evaluation systems [1] and production RAG [E2]. "
+            "I built evaluation systems [1] and production RAG [E2]—carefully. "
             "Both were grounded in measured outcomes 【3†resume】."
         )
         self.assertEqual(
             hide_inline_citations(answer),
-            "I built evaluation systems and production RAG. "
+            "I built evaluation systems and production RAG, carefully. "
             "Both were grounded in measured outcomes.",
         )
+        self.assertNotIn("—", hide_inline_citations(answer))
+        self.assertNotIn("–", hide_inline_citations(answer))
 
     def test_production_controller_uses_lightweight_web_search_service(self):
         from app.agent import lg_controller
@@ -299,7 +301,7 @@ class ControllerApiTests(unittest.TestCase):
         self.assertIn(status["status"], {"ok", "degraded", "not_ready"})
         self.assertIn("index", status)
         page = home()
-        self.assertIn("Currently at Lime", page)
+        self.assertNotIn("Currently at Lime", page)
         self.assertIn('id="sources"', page)
 
     def test_eval_dataset_has_at_least_sixty_cases(self):
