@@ -34,10 +34,10 @@ from app.services.settings import (
     MAX_CONTEXT_TOKENS,
     WEB_FALLBACK_ENABLED,
 )
+from app.services.web_search import search_web
 
 from .eval_utils import POST_FEEDBACK_ENABLED, maybe_post_feedback_async
 from .lc_prompts import REFUSAL, SYSTEM
-from .lc_tools import search_web
 from .lg_utils import rewrite_queries
 from .rag_types import Evidence, RetrievalResult
 from .retrieval import (
@@ -56,6 +56,17 @@ _PII_OUTPUT_RE = re.compile(
     r"(?:\b\d{1,6}\s+[A-Za-z0-9.' -]+\s+"
     r"(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|court|ct)\b)|"
     r"(?:\b\d{5}(?:-\d{4})?\b)",
+    re.I,
+)
+_INLINE_CITATION_RE = re.compile(
+    r"(?<!\w)[ \t]*(?:\(\s*)?"
+    r"(?:"
+    r"\[(?:\^?(?:(?:E|Source)\s*)?\d+"
+    r"(?:\s*[,;–-]\s*(?:(?:E|Source)\s*)?\d+)*)\]"
+    r"(?:\([^)]+\))?"
+    r"|【[^】\n]{0,80}】"
+    r")"
+    r"(?:\s*\))?",
     re.I,
 )
 _PRIVATE_QUESTION_PATTERNS = (
@@ -248,6 +259,14 @@ def validate_answer(answer: str, source_count: int) -> dict[str, Any]:
     }
 
 
+def hide_inline_citations(answer: str) -> str:
+    """Remove model-generated citation markers; sources render separately."""
+    cleaned = _INLINE_CITATION_RE.sub("", answer or "")
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]+([,.;:!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
 class LGController:
     """Canonical deterministic RAG controller used by every application surface."""
 
@@ -429,6 +448,7 @@ class LGController:
             else:
                 answer, first_token_ms = self._compose(question, evidence, on_token)
 
+            answer = hide_inline_citations(answer)
             sources = sources_from_evidence(evidence)
             footnotes = footnotes_from_evidence(evidence)
             validation = validate_answer(answer, len(sources))

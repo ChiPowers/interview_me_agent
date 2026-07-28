@@ -221,7 +221,12 @@ def home() -> str:
         border-top: 1px solid #eee;
         padding-top: 12px;
       }}
-      .sources h3 {{ margin: 0 0 8px; font-size: 13px; color: #666; }}
+      .sources summary {{
+        color: #666;
+        cursor: pointer;
+        font-size: 13px;
+        margin-bottom: 8px;
+      }}
       .source-item {{ margin: 5px 0; font-size: 13px; }}
       .source-item a {{ color: #4B0082; }}
     </style>
@@ -245,7 +250,7 @@ def home() -> str:
         </div>
         <button id="ask">Ask the Question</button>
         <div id="answer"></div>
-        <div id="sources" class="sources"><h3>Sources</h3><div id="source-list"></div></div>
+        <details id="sources" class="sources"><summary>Sources</summary><div id="source-list"></div></details>
         <div id="meta" class="meta"></div>
       </div>
     </div>
@@ -300,7 +305,7 @@ def home() -> str:
         es.addEventListener("final", (evt) => {{
           const payload = JSON.parse(evt.data);
           const trace = payload.trace || {{}};
-          if (!answer.textContent) answer.textContent = payload.answer || "";
+          answer.textContent = payload.answer || answer.textContent;
           const latency = trace.latency_ms ? `${{Math.round(trace.latency_ms)}} ms` : "n/a";
           const refreshed = (payload.source_freshness || {{}}).profile_verified_at ||
             (payload.source_freshness || {{}}).index_built_at;
