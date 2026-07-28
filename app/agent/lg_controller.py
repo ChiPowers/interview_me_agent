@@ -34,10 +34,10 @@ from app.services.settings import (
     MAX_CONTEXT_TOKENS,
     WEB_FALLBACK_ENABLED,
 )
+from app.services.web_search import search_web
 
 from .eval_utils import POST_FEEDBACK_ENABLED, maybe_post_feedback_async
 from .lc_prompts import REFUSAL, SYSTEM
-from .lc_tools import search_web
 from .lg_utils import rewrite_queries
 from .rag_types import Evidence, RetrievalResult
 from .retrieval import (

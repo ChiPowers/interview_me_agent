@@ -19,6 +19,7 @@ from app.api import main as api_main
 from app.api.main import _sse_event, healthz, home
 from app.eval.evaluators import EvalInput, eval_faithfulness, eval_source_rule
 from app.eval.run_eval import eval_input_from_output
+from app.services.web_search import search_web
 
 
 class _FakeController:
@@ -36,6 +37,19 @@ class _FakeController:
 
 
 class ControllerApiTests(unittest.TestCase):
+    def test_production_controller_uses_lightweight_web_search_service(self):
+        from app.agent import lg_controller
+
+        self.assertIs(lg_controller.search_web, search_web)
+        self.assertEqual(search_web.__module__, "app.services.web_search")
+
+    def test_web_search_without_key_returns_structured_error(self):
+        with patch.dict("os.environ", {}, clear=True):
+            result = search_web("recent Lime announcements")
+
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["error"], "missing_tavily_api_key")
+
     def test_private_question_is_refused_without_sources(self):
         streamed = []
         result = LGController().respond(
