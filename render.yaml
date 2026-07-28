@@ -9,8 +9,14 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: AGENT_BACKEND
-        value: langgraph
+      - key: OPENAI_MODEL
+        value: gpt-5.6-terra
+      - key: OPENAI_CANDIDATE_MODEL
+        value: gpt-5.6-luna
+      - key: OPENAI_FALLBACK_MODEL
+        value: gpt-5.6-terra
+      - key: WEB_FALLBACK_ENABLED
+        value: "true"
       - key: OPENAI_API_KEY
         sync: false
       - key: TAVILY_API_KEY

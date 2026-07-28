@@ -1,11 +1,13 @@
 # app/eval/evaluators.py
 from __future__ import annotations
-from typing import Dict, Any, List, Optional, Tuple
-import os, re, math, json
+import json
+import re
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from app.services.settings import JUDGE_MODEL
 
 
 def combined_eval_json(inp: EvalInput, latency_ms: float | None = None) -> dict:
@@ -37,6 +39,9 @@ class EvalInput:
     context: str           # any retrieved local snippets you want to pass (can be empty)
     footnotes: dict        # your structured footnotes dict {idx: {title, url|path}}
     reference: Optional[str] = None   # gold answer (optional)
+    sources: List[Dict[str, Any]] | None = None
+    retrieved_evidence_ids: List[str] | None = None
+    abstained: bool = False
 
 
 def _make_judge(model: Optional[str] = None) -> ChatOpenAI:
@@ -45,8 +50,7 @@ def _make_judge(model: Optional[str] = None) -> ChatOpenAI:
     and avoid long hangs during eval runs.
     """
     return ChatOpenAI(
-        model=model or os.getenv("OPENAI_JUDGE_MODEL", "gpt-5-nano-2025-08-07"),
-        temperature=0,
+        model=model or JUDGE_MODEL,
         timeout=20,      # seconds; prevent stalls
         max_retries=1,   # strict during evals
     )
@@ -101,11 +105,12 @@ def eval_relevance(inp: EvalInput, model: str = None) -> Dict[str, Any]:
 
 
 def eval_conciseness(inp: EvalInput, model: str = None) -> Dict[str, Any]:
-    """Is the answer concise (≤ ~90 words) without missing key info?"""
+    """Is the answer direct and normally within the 60–120 word product target?"""
     llm = _make_judge(model)
     system = (
         "Evaluate the conciseness of the ANSWER. Penalize verbosity or repetition. "
-        "Prefer ≤ ~90 words if possible.\nOutput:\nSCORE: 0.0-1.0\nREASON: short justification."
+        "Prefer 60–120 words for substantive questions and allow shorter single-fact answers.\n"
+        "Output:\nSCORE: 0.0-1.0\nREASON: short justification."
     )
     user = f"QUESTION:\n{inp.question}\n\nANSWER:\n{inp.answer}"
     return {"name": "conciseness", **_llm_judge(llm, system, user)}
@@ -126,6 +131,12 @@ def eval_completeness(inp: EvalInput, model: str = None) -> Dict[str, Any]:
 
 def eval_faithfulness(inp: EvalInput, model: str = None) -> Dict[str, Any]:
     """Faithfulness (grounding): are factual claims supported by CONTEXT or FOOTNOTES?"""
+    if inp.abstained:
+        return {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Deterministic privacy abstention; no personal factual claim was made.",
+        }
     llm = _make_judge(model)
     fnotes = json.dumps(inp.footnotes, ensure_ascii=False) if inp.footnotes else "{}"
     system = (
@@ -141,7 +152,8 @@ def eval_style_tone(inp: EvalInput, model: str = None) -> Dict[str, Any]:
     """Does the answer sound like Chivon: first-person, professional, interview-appropriate?"""
     llm = _make_judge(model)
     system = (
-        "Evaluate style and tone: first-person voice, professional, clear, interview-appropriate. "
+        "Evaluate style and tone: first-person, warm expert, practical, confident without overclaiming, "
+        "evaluation-first, lightly conversational, and professional. "
         "Penalize personal-life disclosures or unprofessional language.\n"
         "Output:\nSCORE: 0.0-1.0\nREASON: short justification."
     )
@@ -150,11 +162,12 @@ def eval_style_tone(inp: EvalInput, model: str = None) -> Dict[str, Any]:
 
 
 def eval_instruction_following(inp: EvalInput, model: str = None) -> Dict[str, Any]:
-    """Did the answer follow constraints (≤3 sentences, professional-only, short)?"""
+    """Did the answer follow the canonical product constraints?"""
     llm = _make_judge(model)
     system = (
-        "Evaluate if the ANSWER follows instructions: ≤3 sentences, ≤~90 words, professional scope (no personal life), "
-        "and concise. Output:\nSCORE: 0.0-1.0\nREASON: short justification."
+        "Evaluate if the ANSWER follows instructions: 2–4 sentences, normally 60–120 words, "
+        "professional scope, direct opening, and no unsupported claims. A simple fact may be shorter. "
+        "Output:\nSCORE: 0.0-1.0\nREASON: short justification."
     )
     user = f"ANSWER:\n{inp.answer}"
     return {"name": "instruction_following", **_llm_judge(llm, system, user)}
@@ -162,23 +175,42 @@ def eval_instruction_following(inp: EvalInput, model: str = None) -> Dict[str, A
 
 # ---------------------------- Rule-based helpers ----------------------------
 
-def eval_length_rule(inp: EvalInput, max_words: int = 90) -> Dict[str, Any]:
+def eval_length_rule(inp: EvalInput, max_words: int = 120) -> Dict[str, Any]:
     words = re.findall(r"\b\w+\b", inp.answer)
     score = 1.0 if len(words) <= max_words else max(0.0, 1.0 - (len(words) - max_words) / max(max_words, 1))
     return {"name": "length_rule", "score": round(score, 3), "reason": f"{len(words)} words (max {max_words})."}
 
-def eval_marker_rule(inp: EvalInput) -> Dict[str, Any]:
-    """Optional: award small credit if answer includes footnote markers that match provided footnotes."""
-    markers = re.findall(r"\[(\d+)\]", inp.answer)
-    have = 0
-    for m in markers:
-        try:
-            if int(m) in {int(k) for k in inp.footnotes.keys()}:
-                have += 1
-        except Exception:
-            pass
-    score = min(1.0, have / max(1, len(markers))) if markers else 0.0
-    return {"name": "citation_markers_rule", "score": round(score, 3), "reason": f"{have}/{len(markers)} markers matched."}
+def eval_source_rule(inp: EvalInput) -> Dict[str, Any]:
+    """Every displayed source must correspond to preassigned retrieved evidence."""
+    sources = inp.sources or []
+    displayed_ids = {
+        str(source.get("id"))
+        for source in sources
+        if isinstance(source, dict) and source.get("id")
+    }
+    if not displayed_ids and inp.footnotes:
+        displayed_ids = {f"E{key}" for key in inp.footnotes}
+    retrieved_ids = (
+        displayed_ids
+        if inp.retrieved_evidence_ids is None
+        else {str(item) for item in inp.retrieved_evidence_ids}
+    )
+    missing = displayed_ids - retrieved_ids
+
+    if not displayed_ids:
+        reason = "No sources displayed; citation precision is vacuously satisfied."
+    elif missing:
+        reason = (
+            "Displayed source IDs were not present in retrieved evidence: "
+            + ", ".join(sorted(missing))
+        )
+    else:
+        reason = f"All {len(displayed_ids)} displayed sources match retrieved evidence."
+    return {
+        "name": "deterministic_sources_rule",
+        "score": 0.0 if missing else 1.0,
+        "reason": reason,
+    }
 
 def eval_latency_ms(latency_ms: Optional[float]) -> Dict[str, Any]:
     """Pass observed latency (ms) to score perf targets."""
@@ -201,7 +233,7 @@ def default_eval_suite(inp: EvalInput, latency_ms: Optional[float] = None) -> Li
         eval_style_tone(inp),
         eval_instruction_following(inp),
         eval_length_rule(inp),
-        eval_marker_rule(inp),
+        eval_source_rule(inp),
     ]
     if latency_ms is not None:
         out.append(eval_latency_ms(latency_ms))

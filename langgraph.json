@@ -17,6 +17,10 @@
   ],
   "env": {
     "LANGCHAIN_TRACING_V2": "true",
-    "LANGCHAIN_PROJECT": "interview-agent-bot"
+    "LANGCHAIN_PROJECT": "interview-agent-bot",
+    "OPENAI_MODEL": "gpt-5.6-terra",
+    "OPENAI_CANDIDATE_MODEL": "gpt-5.6-luna",
+    "OPENAI_FALLBACK_MODEL": "gpt-5.6-terra",
+    "WEB_FALLBACK_ENABLED": "true"
   }
 }

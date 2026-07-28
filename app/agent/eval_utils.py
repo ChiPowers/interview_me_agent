@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import threading
 import random
-from typing import Dict, Any
+from typing import Dict
 
 from langsmith import Client
 
-from eval.evaluators import EvalInput, combined_eval_json
+try:
+    from app.eval.evaluators import EvalInput, combined_eval_json
+except ModuleNotFoundError:
+    from eval.evaluators import EvalInput, combined_eval_json
 
 # LangSmith feedback toggles (consistent + permissive parsing)
 _POST_FEEDBACK_RAW = os.getenv("POST_FEEDBACK", "0")

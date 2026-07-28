@@ -4,7 +4,15 @@ import trafilatura
 
 def fetch_and_clean(url: str, timeout: int = 15) -> str:
     try:
-        r = requests.get(url, timeout=timeout)
+        r = requests.get(
+            url,
+            timeout=timeout,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; InterviewChivonSourceRefresh/1.0)"
+                )
+            },
+        )
         r.raise_for_status()
     except Exception:
         return ""

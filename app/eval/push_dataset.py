@@ -1,8 +1,10 @@
 # app/eval/push_dataset.py
 from __future__ import annotations
-import os, yaml
+import os
 from pathlib import Path
 from typing import Dict, Any, List
+
+import yaml
 from langsmith import Client
 
 DATASET_NAME = os.getenv("LS_DATASET", "Agent QAS")
@@ -63,9 +65,9 @@ def main():
 
     # Create or fetch dataset
     try:
-        ds = client.create_dataset(dataset_name=DATASET_NAME, description=DATASET_DESC)
+        dataset = client.create_dataset(dataset_name=DATASET_NAME, description=DATASET_DESC)
     except Exception:
-        ds = client.read_dataset(dataset_name=DATASET_NAME)
+        dataset = client.read_dataset(dataset_name=DATASET_NAME)
     # print(f"Dataset: {DATASET_NAME} ({ds['id']})")
 
     # # Index existing examples by question text to avoid dupes
@@ -82,7 +84,7 @@ def main():
         client.create_example(
             inputs={"question": q},
             outputs={"reference": a} if a else None,
-            dataset_id="aab76a15-278e-4cce-a24d-f801679dd715",
+            dataset_id=dataset.id,
         )
         created += 1
 

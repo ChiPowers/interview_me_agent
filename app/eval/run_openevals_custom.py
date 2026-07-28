@@ -1,15 +1,13 @@
 # app/eval/run_openevals_custom.py
 from __future__ import annotations
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv()
-
 from langsmith import Client
-from ..agent.lc_controller import LCController
-from .evaluators import EvalInput, default_eval_suite
+from app.eval.evaluators import EvalInput, default_eval_suite
+from ..agent.lg_controller import LGController
 
+load_dotenv()
 # ---- Config (env overrides) ----
 PROJECT = os.getenv("LANGCHAIN_PROJECT", "interview-agent-bot")
 DATASET_NAME = os.getenv("LS_DATASET_NAME", "Agent QAS")  # exact dataset name in LangSmith
@@ -19,17 +17,18 @@ ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
 
 # Ensure the experiment shows under your project
 os.environ["LANGCHAIN_PROJECT"] = PROJECT
-os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "true")  # optional
-os.environ["LANGSMITH_API_KEY"] = EVAL_API_KEY or ""
+if EVAL_API_KEY:
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ["LANGSMITH_API_KEY"] = EVAL_API_KEY
 
-client = Client(api_key=EVAL_API_KEY, api_url=ENDPOINT)
+client = Client(api_key=EVAL_API_KEY, api_url=ENDPOINT) if EVAL_API_KEY else None
 
 # ----- Your application target (what you want to evaluate) -----
 _controller = None
 def _controller_singleton():
     global _controller
     if _controller is None:
-        _controller = LCController()
+        _controller = LGController(include_context_in_trace=True)
     return _controller
 
 def target(inputs: dict) -> dict:
@@ -43,15 +42,10 @@ def target(inputs: dict) -> dict:
     return {
         "answer": out.get("answer", ""),
         "context": (out.get("trace") or {}).get("local_context_preview", ""),
+        "sources": out.get("sources") or [],
         "footnotes": out.get("footnotes") or {},
         "trace": out.get("trace") or {},
     }
-
-# ----- Adapter: use your evaluators.py suite inside LangSmith evaluate() -----
-# at top
-from langsmith.evaluation.evaluator import EvaluationResult
-
-# run_openevals_custom.py (or wherever your adapter lives)
 
 def _coerce_score(v):
     try:
@@ -59,26 +53,56 @@ def _coerce_score(v):
     except Exception:
         return None
 
+
+def eval_input_from_run(
+    inputs: dict,
+    outputs: dict,
+    reference_outputs: dict,
+    *,
+    run=None,
+) -> EvalInput:
+    """Reconstruct the full source contract from a LangSmith target result."""
+    q = inputs.get("question") or inputs.get("input") or ""
+    a = outputs.get("answer") or outputs.get("output") or ""
+    ref = (
+        (reference_outputs or {}).get("answer")
+        or (reference_outputs or {}).get("reference")
+    )
+    extra = dict(outputs or {})
+    try:
+        run_outputs = (run and getattr(run, "outputs", None)) or {}
+        extra.update(run_outputs)
+    except Exception:
+        pass
+
+    trace = extra.get("trace") or {}
+    retrieval = trace.get("retrieval") or {}
+    return EvalInput(
+        question=q,
+        answer=a,
+        context=trace.get("local_context_preview", "") or "",
+        footnotes=extra.get("footnotes") or {},
+        reference=ref,
+        sources=extra.get("sources") or [],
+        retrieved_evidence_ids=[
+            item["id"]
+            for item in retrieval.get("evidence") or []
+            if isinstance(item, dict) and item.get("id")
+        ],
+        abstained=bool(trace.get("refusal")),
+    )
+
+
 def chivon_eval_adapter(inputs: dict, outputs: dict, reference_outputs: dict, *, run=None, example=None):
     """
     Wrap app.eval.evaluators.default_eval_suite -> list of dicts that LangSmith accepts.
     """
-    from eval.evaluators import EvalInput, default_eval_suite
-
-    q = inputs.get("question") or inputs.get("input") or ""
-    a = outputs.get("answer") or outputs.get("output") or ""
-    ref = (reference_outputs or {}).get("answer") if reference_outputs else None
-
-    ctx = ""
-    footnotes = {}
-    try:
-        extra = (run and getattr(run, "outputs", None)) or {}
-        ctx = (extra.get("trace") or {}).get("local_context_preview", "") or ""
-        footnotes = extra.get("footnotes") or {}
-    except Exception:
-        pass
-
-    ei = EvalInput(question=q, answer=a, context=ctx, footnotes=footnotes, reference=ref)
+    ei = eval_input_from_run(
+        inputs,
+        outputs,
+        reference_outputs,
+        run=run,
+    )
     metrics = default_eval_suite(ei, latency_ms=None)
 
     results = []
@@ -96,6 +120,8 @@ def chivon_eval_adapter(inputs: dict, outputs: dict, reference_outputs: dict, *,
     return results
 
 if __name__ == "__main__":
+    if client is None:
+        raise SystemExit("Set LANGSMITH_EVAL_API_KEY or LANGSMITH_API_KEY first.")
     print(f"Project: {PROJECT}")
     print(f"Dataset: {DATASET_NAME}")
     print(f"Experiment prefix: {EXPERIMENT_PREFIX}")

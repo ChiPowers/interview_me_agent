@@ -1,72 +1,59 @@
-"""
-Interview Agent graph builder — LangChain v1 ``create_agent`` with middleware.
-
-Replaces the hand-rolled StateGraph with a single ``create_agent()`` call.
-All RAG routing, hallucination guarding, and trace collection are handled
-by middleware hooks defined in ``middleware.py``.
-"""
+"""LangGraph deployment adapter over the canonical deterministic RAG controller."""
 from __future__ import annotations
 
-import os
-import sqlite3
-from typing import Optional
+from typing import Any, Optional
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph import END, START, StateGraph
 
-from .lc_prompts import SYSTEM
-from .lc_tools import retrieve_local_tool, TAVILY, fetch_url_tool
+from .lg_controller import LGController
 from .lg_state import InterviewState
-from .middleware import get_middleware
 
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07")
 
-# Answer-policy additions appended to the system prompt
-POLICY = (
-    "\nPolicy:\n"
-    "1) ALWAYS call the retrieve_local tool FIRST before answering any question. "
-    "You MUST search local documents before responding — never answer from your own knowledge alone.\n"
-    "2) If retrieve_local returns insufficient context, then use tavily_search, "
-    "then optionally fetch_url for more detail.\n"
-    "3) Keep answers ≤ 3 sentences (≤ 90 words), first person, professional only.\n"
-    "4) Add footnote markers [1], [2]. Cite local labels like "
-    "'local • <file> p.<n>' and real URLs for web.\n"
-)
+def _message_content(message: Any) -> str:
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    return str(getattr(message, "content", "") or "")
 
 
 def build_graph(checkpoint_path: Optional[str] = None):
     """
-    Return a compiled agent graph using ``create_agent``.
+    Compile a one-node graph that calls the exact controller used by FastAPI,
+    Streamlit, CLI smoke tests, and evaluations.
 
-    The agent uses the ReAct loop (model → tool → observation → repeat)
-    with middleware controlling RAG routing, hallucination guard, and
-    trace/footnote collection.
+    ``checkpoint_path`` is retained for compatibility. The canonical v3 pipeline
+    remains stateless until conversational memory has its own evaluated contract.
     """
-    try:
-        from langchain.agents import create_agent
-        from langchain_openai import ChatOpenAI
-    except Exception as exc:  # pragma: no cover - import guard for envs without langgraph
-        raise RuntimeError(
-            "LangChain agent backend unavailable. Install/upgrade langchain to use LGController."
-        ) from exc
+    controller = LGController()
 
-    tools = [retrieve_local_tool, TAVILY, fetch_url_tool]
+    def answer_node(state: InterviewState) -> dict[str, Any]:
+        question = str(state.get("question") or state.get("input") or "").strip()
+        if not question:
+            for message in reversed(state.get("messages") or []):
+                content = _message_content(message)
+                role = (
+                    message.get("role")
+                    if isinstance(message, dict)
+                    else getattr(message, "type", "")
+                )
+                if role in ("user", "human") and content:
+                    question = content.strip()
+                    break
+        result = controller.respond(question)
+        return {
+            "question": question,
+            "input": question,
+            "answer": result["answer"],
+            "output": result["answer"],
+            "sources": result.get("sources") or [],
+            "footnotes": result.get("footnotes") or {},
+            "source_freshness": result.get("source_freshness") or {},
+            "validation": result.get("validation") or {},
+            "trace": result.get("trace") or {},
+            "messages": [{"role": "assistant", "content": result["answer"]}],
+        }
 
-    use_checkpoint = (
-        os.getenv("LANGGRAPH_CHECKPOINT_ENABLED", "0").lower() in ("1", "true", "yes", "on")
-        or os.getenv("LANGGRAPH_CHECKPOINTING", "0") == "1"
-    )
-    checkpointer = None
-    if use_checkpoint and checkpoint_path:
-        conn = sqlite3.connect(checkpoint_path, check_same_thread=False)
-        checkpointer = SqliteSaver(conn)
-
-    llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0.2)
-    agent = create_agent(
-        model=llm,
-        tools=tools,
-        system_prompt=SYSTEM + POLICY,
-        middleware=get_middleware(),
-        checkpointer=checkpointer,
-    )
-
-    return agent
+    graph = StateGraph(InterviewState)
+    graph.add_node("respond", answer_node)
+    graph.add_edge(START, "respond")
+    graph.add_edge("respond", END)
+    return graph.compile()

@@ -10,6 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from app.services.vectorstore import load_faiss_or_none
+from app.services.settings import GENERATION_MODEL, QUERY_REWRITE_MODEL
 from .lc_prompts import SYSTEM
 
 
@@ -60,8 +61,7 @@ def rewrite_queries(question: str, n: int = 3) -> List[str]:
     if n <= 0:
         return []
     llm = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        temperature=0.3,
+        model=QUERY_REWRITE_MODEL,
         max_tokens=120,
     )
     prompt = ChatPromptTemplate.from_messages([
@@ -238,13 +238,13 @@ def compose_from_observations(question: str, steps: List[Tuple[Any, Any]]) -> st
             break
     urls = list(dict.fromkeys(urls))[:3]
 
-    llm = ChatOpenAI(model=os.getenv("OPENAI_COMPOSER_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")), temperature=0.2)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_COMPOSER_MODEL", GENERATION_MODEL))
     compose = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 "You are Chivon. Write a final interview answer:\n"
-                "- ≤ 3 sentences, ≤ 90 words.\n- Professional scope only.\n"
+                "- Follow the canonical 2–4 sentence, normally 60–120 word policy.\n"
                 "- Use footnote markers [1], [2] with provided local labels/URLs if applicable.",
             ),
             ("human", "Question: {q}\n\nObserved context:\n{ctx}\n\nLocal labels:\n{labels}\n\nURLs:\n{urls}"),
@@ -284,7 +284,7 @@ def compose_answer_with_policy(
         ("system", SYSTEM),
         ("human", "Question: {question}\n\nContext:\n{context}"),
     ])
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o"), temperature=0.2)
+    llm = ChatOpenAI(model=GENERATION_MODEL)
     return llm.invoke(prompt.format_messages(question=question, context=combined_context)).content.strip()
 
 
@@ -341,7 +341,7 @@ def compose_answer_with_policy_stream(
         ("system", SYSTEM),
         ("human", "Question: {question}\n\nContext:\n{context}"),
     ])
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o"), temperature=0.2)
+    llm = ChatOpenAI(model=GENERATION_MODEL)
     full_text_parts: List[str] = []
     for chunk in llm.stream(prompt.format_messages(question=question, context=combined_context)):
         text = _extract_chunk_text(chunk)
@@ -360,14 +360,13 @@ def guard_answer_with_evidence(question: str, answer: str, context: str) -> str:
         return answer
 
     checker = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        temperature=0,
+        model=GENERATION_MODEL,
         max_tokens=160,
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system",
          "You verify if the answer is fully supported by the context. "
-         "Reply as:\nSUPPORTED: yes|no\nANSWER: <supported or trimmed answer with ≤90 words>"),
+         "Reply as:\nSUPPORTED: yes|no\nANSWER: <supported or trimmed answer>"),
         ("human",
          "QUESTION:\n{q}\n\nANSWER:\n{a}\n\nCONTEXT:\n{ctx}\n\n"
          "If unsupported, trim or restate using only what is grounded in context."),
@@ -401,9 +400,11 @@ def analyze_local_context(question: str, local_ctx: str) -> Dict[str, Any]:
 
     hard = False
     if ctx.startswith("[local] No index loaded."):
-        reasons.append("no_index"); hard = True
+        reasons.append("no_index")
+        hard = True
     if ctx.startswith("[local] error:"):
-        reasons.append("index_error"); hard = True
+        reasons.append("index_error")
+        hard = True
 
     chunks = [c for c in ctx.split("\n\n---\n\n") if c.strip()]
     total_chars = len("".join(chunks))
@@ -441,8 +442,7 @@ def analyze_local_context(question: str, local_ctx: str) -> Dict[str, Any]:
 def should_use_web_judge(question: str, local_ctx: str) -> Dict[str, Any]:
     """Tiny LLM judge to double-check the routing heuristic."""
     judge = ChatOpenAI(
-        model=os.getenv("OPENAI_ROUTE_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
-        temperature=0,
+        model=os.getenv("OPENAI_ROUTE_MODEL", GENERATION_MODEL),
         max_tokens=32,
         timeout=8,
     )

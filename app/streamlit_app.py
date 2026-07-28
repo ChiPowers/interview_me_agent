@@ -1,12 +1,12 @@
 # app/streamlit_app.py
 import os
-import time
-import base64
-from io import BytesIO
+import html
+import json
+import logging
+from pathlib import Path
 from urllib.parse import quote
 
 import streamlit as st
-from PIL import Image
 from dotenv import load_dotenv
 
 # ---------- env ----------
@@ -51,9 +51,9 @@ if os.getenv("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGSMITH_TRACING", "true")
     os.environ.setdefault("LANGCHAIN_PROJECT", "interview-me-agent")
 
-from services.ingest_index import ensure_index  # auto-build/load on boot
+from services.ingest_index import ensure_index  # noqa: E402 - env is hydrated first
+from services.settings import LINKEDIN_PROFILE_URL  # noqa: E402
 
-import logging, json
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("interview_agent")
 
@@ -66,8 +66,6 @@ st.set_page_config(
 )
 
 # ---------- assets (robust for local & Streamlit Cloud) ----------
-from pathlib import Path
-
 def _first_existing_dir(candidates):
     for p in candidates:
         if p and p.exists() and p.is_dir():
@@ -223,15 +221,17 @@ with st.sidebar:
     if headshot_b64:
         st.image(f"data:image/png;base64,{headshot_b64}", width=160, caption="Chivon Powers, PhD")
         st.markdown("[LinkedIn](https://www.linkedin.com/in/chivon-powers-phd-a6730610/) · [GitHub](https://github.com/Chipowers/)")
+        st.success("● Currently at Lime · Senior Data Scientist, Payments & Fraud")
     else:
         st.info("Headshot image not found in /static (see logs).")
 
 # ---------- ensure index ready once ----------
 @st.cache_resource(show_spinner="Preparing search index…")
 def _ensure_index_ready():
-    ensure_index()
-    return True
-_ensure_index_ready()
+    return ensure_index()
+index_state = _ensure_index_ready()
+if index_state.get("status") != "ok":
+    st.caption("Search index is degraded; answers will abstain when grounded evidence is unavailable.")
 
 # ---------- controller & state ----------
 def _init_controller():
@@ -239,44 +239,25 @@ def _init_controller():
         def __init__(self, msg: str):
             self.msg = msg
 
-        def respond(self, question: str):
-            return {"answer": self.msg, "footnotes": {}, "trace": {"error": self.msg}}
+        def respond(self, question: str, on_token=None):
+            if on_token:
+                on_token(self.msg)
+            return {
+                "answer": self.msg,
+                "sources": [],
+                "footnotes": {},
+                "trace": {"error": self.msg},
+            }
 
-    backend = os.getenv("AGENT_BACKEND", "langgraph").lower()
-    if backend == "langchain":
-        logger.info("Using legacy LangChain controller (AGENT_BACKEND=langchain).")
-        try:
-            from agent.lc_controller import LCController
-            return LCController()
-        except Exception as exc:
-            logger.exception("Legacy LangChain controller failed to initialize: %s", exc)
-            msg = f"Legacy LangChain backend failed: {exc}"
-            st.error(msg)
-            return _ErrorController(msg)
     try:
-        logger.info("Using LangGraph controller (AGENT_BACKEND=%s).", backend)
-        from agent.lg_controller import LGController
+        logger.info("Using canonical deterministic RAG controller.")
+        from agent.lg_controller import LGController  # noqa: E402
         return LGController()
     except Exception as exc:
-        logger.exception("LangGraph controller failed to initialize: %s", exc)
-        st.warning("LangGraph backend failed to initialize.")
-        if os.getenv("ALLOW_LEGACY_FALLBACK", "0").lower() not in ("1", "true", "yes", "on"):
-            msg = f"LangGraph error: {exc}"
-            st.error(msg)
-            return _ErrorController(msg)
-        st.warning("Attempting legacy LangChain fallback (ALLOW_LEGACY_FALLBACK=1).")
-        try:
-            from agent.lc_controller import LCController
-            return LCController()
-        except Exception as lc_exc:
-            logger.exception("Legacy LangChain controller also failed: %s", lc_exc)
-            msg = (
-                "Both agent backends failed to initialize.\n"
-                f"LangGraph error: {exc}\n"
-                f"LangChain error: {lc_exc}"
-            )
-            st.error(msg)
-            return _ErrorController(msg)
+        logger.exception("Canonical RAG controller failed to initialize: %s", exc)
+        msg = f"RAG controller error: {exc}"
+        st.error(msg)
+        return _ErrorController(msg)
 
 
 if "controller" not in st.session_state:
@@ -289,12 +270,19 @@ st.markdown(
         {f'<img src="data:image/png;base64,{logo_b64}" width="150">' if logo_b64 else ""}
         <h1 style="margin-bottom: 0;">Interview Chivon Powers</h1>
         <p class="subtitle">
-            This bot responds as me, using my resume and other documents to answer your interview questions.<br>
-            It’s a practical demonstration of my AI product development skills and a fun way to learn about my work experience.
+            Ask about my work across AI, data science, product, and research.<br>
+            Answers are grounded in approved professional sources and shaped with an evaluation-first mindset.
         </p>
+        <p><a href="{LINKEDIN_PROFILE_URL}" target="_blank">● Currently at Lime · Senior Data Scientist, Payments &amp; Fraud</a></p>
     </div>
     """,
     unsafe_allow_html=True,
+)
+
+st.caption(
+    "Try: “What have you built at Lime, and what measurable impact has it had?” · "
+    "“What project best shows your evaluation-first approach?” · "
+    "“How do you connect research, product, and ML?”"
 )
 
 # ---------- footnotes renderer ----------
@@ -365,7 +353,7 @@ if submitted:
             html_parts = ['<div class="answer-container">']
             if chatshot_b64:
                 html_parts.append(f'<img src="data:image/png;base64,{chatshot_b64}" class="answer-headshot">')
-            html_parts.append(f'<div class="answer-text">{live}</div>')
+            html_parts.append(f'<div class="answer-text">{html.escape(live)}</div>')
             html_parts.append("</div>")
             placeholder.markdown("".join(html_parts), unsafe_allow_html=True)
 
@@ -378,6 +366,8 @@ if submitted:
 
         answer = (result.get("answer") or "").strip()
         footnotes = result.get("footnotes") or {}
+        sources = result.get("sources") or []
+        freshness = result.get("source_freshness") or {}
         trace = result.get("trace") or {}
 
         # log to console
@@ -394,8 +384,21 @@ if submitted:
             html_parts = ['<div class="answer-container">']
             if chatshot_b64:
                 html_parts.append(f'<img src="data:image/png;base64,{chatshot_b64}" class="answer-headshot">')
-            html_parts.append(f'<div class="answer-text">{answer}</div>')
+            html_parts.append(f'<div class="answer-text">{html.escape(answer)}</div>')
             html_parts.append("</div>")
             placeholder.markdown("".join(html_parts), unsafe_allow_html=True)
+
+        if sources:
+            with st.expander("Sources", expanded=False):
+                for source in sources:
+                    label = source.get("label", "Source")
+                    href = source.get("url")
+                    if href:
+                        st.markdown(f"- [{label}]({href})")
+                    else:
+                        st.markdown(f"- {label}")
+        refreshed = freshness.get("profile_verified_at") or freshness.get("index_built_at")
+        if refreshed:
+            st.caption(f"Sources refreshed: {refreshed[:10]}")
 
 st.markdown("<div style='margin-bottom: 40px;'></div>", unsafe_allow_html=True)
