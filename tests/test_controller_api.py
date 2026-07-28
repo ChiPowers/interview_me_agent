@@ -12,6 +12,7 @@ from app.agent.lg_controller import (
     _asks_private_question,
     _asks_for_unsupported_lime_detail,
     _web_evidence,
+    hide_inline_citations,
     validate_answer,
 )
 from app.agent.rag_types import Evidence, RetrievalResult
@@ -37,6 +38,17 @@ class _FakeController:
 
 
 class ControllerApiTests(unittest.TestCase):
+    def test_inline_citations_are_hidden_from_answer_text(self):
+        answer = (
+            "I built evaluation systems [1] and production RAG [E2]. "
+            "Both were grounded in measured outcomes 【3†resume】."
+        )
+        self.assertEqual(
+            hide_inline_citations(answer),
+            "I built evaluation systems and production RAG. "
+            "Both were grounded in measured outcomes.",
+        )
+
     def test_production_controller_uses_lightweight_web_search_service(self):
         from app.agent import lg_controller
 

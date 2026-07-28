@@ -245,7 +245,7 @@ def compose_from_observations(question: str, steps: List[Tuple[Any, Any]]) -> st
                 "system",
                 "You are Chivon. Write a final interview answer:\n"
                 "- Follow the canonical 2–4 sentence, normally 60–120 word policy.\n"
-                "- Use footnote markers [1], [2] with provided local labels/URLs if applicable.",
+                "- Do not include citations or footnote markers in the answer.",
             ),
             ("human", "Question: {q}\n\nObserved context:\n{ctx}\n\nLocal labels:\n{labels}\n\nURLs:\n{urls}"),
         ]

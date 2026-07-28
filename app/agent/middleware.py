@@ -59,8 +59,6 @@ def _risk_flags(answer: str, context: str, footnote_count: int) -> List[str]:
         flags.append("thin_context")
     if footnote_count == 0:
         flags.append("missing_footnotes")
-    if not re.search(r"\[\d+\]", answer):
-        flags.append("missing_citation_markers")
     at = _tokenize(answer)
     ct = _tokenize(context)
     if at and ct:
@@ -99,4 +97,3 @@ def evaluate_answer_post(
         guarded = guard_answer_with_evidence(question, answer, context)
         return guarded, meta
     return answer, meta
-

@@ -58,6 +58,17 @@ _PII_OUTPUT_RE = re.compile(
     r"(?:\b\d{5}(?:-\d{4})?\b)",
     re.I,
 )
+_INLINE_CITATION_RE = re.compile(
+    r"(?<!\w)[ \t]*(?:\(\s*)?"
+    r"(?:"
+    r"\[(?:\^?(?:(?:E|Source)\s*)?\d+"
+    r"(?:\s*[,;–-]\s*(?:(?:E|Source)\s*)?\d+)*)\]"
+    r"(?:\([^)]+\))?"
+    r"|【[^】\n]{0,80}】"
+    r")"
+    r"(?:\s*\))?",
+    re.I,
+)
 _PRIVATE_QUESTION_PATTERNS = (
     r"\b(?:home|street|mailing|residential)\s+address\b",
     r"\bwhere\s+do\s+you\s+live\b",
@@ -248,6 +259,14 @@ def validate_answer(answer: str, source_count: int) -> dict[str, Any]:
     }
 
 
+def hide_inline_citations(answer: str) -> str:
+    """Remove model-generated citation markers; sources render separately."""
+    cleaned = _INLINE_CITATION_RE.sub("", answer or "")
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]+([,.;:!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
 class LGController:
     """Canonical deterministic RAG controller used by every application surface."""
 
@@ -429,6 +448,7 @@ class LGController:
             else:
                 answer, first_token_ms = self._compose(question, evidence, on_token)
 
+            answer = hide_inline_citations(answer)
             sources = sources_from_evidence(evidence)
             footnotes = footnotes_from_evidence(evidence)
             validation = validate_answer(answer, len(sources))

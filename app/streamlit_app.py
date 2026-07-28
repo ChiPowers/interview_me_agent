@@ -379,14 +379,14 @@ if submitted:
         # keep refs for evaluation
         logger.info("FOOTNOTES (eval only): %s", json.dumps(footnotes, ensure_ascii=False))
         
-        if not accum_chunks:
-            # Fallback render if no stream tokens were emitted.
-            html_parts = ['<div class="answer-container">']
-            if chatshot_b64:
-                html_parts.append(f'<img src="data:image/png;base64,{chatshot_b64}" class="answer-headshot">')
-            html_parts.append(f'<div class="answer-text">{html.escape(answer)}</div>')
-            html_parts.append("</div>")
-            placeholder.markdown("".join(html_parts), unsafe_allow_html=True)
+        # Replace the streamed draft with the normalized final answer. This
+        # deterministically removes any citation markers the model emitted.
+        html_parts = ['<div class="answer-container">']
+        if chatshot_b64:
+            html_parts.append(f'<img src="data:image/png;base64,{chatshot_b64}" class="answer-headshot">')
+        html_parts.append(f'<div class="answer-text">{html.escape(answer)}</div>')
+        html_parts.append("</div>")
+        placeholder.markdown("".join(html_parts), unsafe_allow_html=True)
 
         if sources:
             with st.expander("Sources", expanded=False):
