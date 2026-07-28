@@ -58,15 +58,26 @@ _PII_OUTPUT_RE = re.compile(
     r"(?:\b\d{5}(?:-\d{4})?\b)",
     re.I,
 )
-_INLINE_CITATION_RE = re.compile(
-    r"(?<!\w)[ \t]*(?:\(\s*)?"
+_CITATION_MARKER_PATTERN = (
     r"(?:"
     r"\[(?:\^?(?:(?:E|Source)\s*)?\d+"
     r"(?:\s*[,;–-]\s*(?:(?:E|Source)\s*)?\d+)*)\]"
     r"(?:\([^)]+\))?"
     r"|【[^】\n]{0,80}】"
     r")"
-    r"(?:\s*\))?",
+)
+_CITATION_ATTRIBUTION_RE = re.compile(
+    r"(?:,\s*)?\b"
+    r"(?:according\s+to|per|based\s+on|as\s+(?:shown|noted|documented)\s+in)"
+    r"\s+(?:the\s+)?(?:source\s+)?"
+    + _CITATION_MARKER_PATTERN
+    + r"\s*,?\s*",
+    re.I,
+)
+_INLINE_CITATION_RE = re.compile(
+    r"(?<!\w)[ \t]*(?:\(\s*)?"
+    + _CITATION_MARKER_PATTERN
+    + r"(?:\s*\))?",
     re.I,
 )
 _PRIVATE_QUESTION_PATTERNS = (
@@ -260,10 +271,21 @@ def validate_answer(answer: str, source_count: int) -> dict[str, Any]:
 
 
 def hide_inline_citations(answer: str) -> str:
-    """Remove model-generated citation markers; sources render separately."""
-    cleaned = _INLINE_CITATION_RE.sub("", answer or "")
+    """Normalize visible answer text; sources render separately."""
+    cleaned = _CITATION_ATTRIBUTION_RE.sub(
+        lambda match: " " if match.group(0).startswith(",") else "",
+        answer or "",
+    )
+    cleaned = _INLINE_CITATION_RE.sub("", cleaned)
+    cleaned = cleaned.replace("—", ", ").replace("–", "-")
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"[ \t]+([,.;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r",\s*,", ",", cleaned)
+    cleaned = re.sub(
+        r"(^|[.!?]\s+)([a-z])",
+        lambda match: match.group(1) + match.group(2).upper(),
+        cleaned,
+    )
     return cleaned.strip()
 
 
@@ -384,7 +406,7 @@ class LGController:
                     for item in content
                     if isinstance(item, dict)
                 )
-            token = str(content or "")
+            token = str(content or "").replace("—", ", ").replace("–", "-")
             if not token:
                 continue
             if first_token_ms is None:

@@ -49,6 +49,19 @@ class ControllerApiTests(unittest.TestCase):
             "Both were grounded in measured outcomes.",
         )
 
+    def test_citation_attribution_is_removed_without_malformed_prose(self):
+        self.assertEqual(
+            hide_inline_citations(
+                "According to [1], the system reduced latency. "
+                "The evidence, as shown in [E2], supports that result."
+            ),
+            "The system reduced latency. The evidence supports that result.",
+        )
+        self.assertEqual(
+            hide_inline_citations("Per 【3†resume】, she led the evaluation."),
+            "She led the evaluation.",
+        )
+
     def test_production_controller_uses_lightweight_web_search_service(self):
         from app.agent import lg_controller
 
@@ -299,8 +312,10 @@ class ControllerApiTests(unittest.TestCase):
         self.assertIn(status["status"], {"ok", "degraded", "not_ready"})
         self.assertIn("index", status)
         page = home()
-        self.assertIn("Currently at Lime", page)
+        self.assertNotIn("Currently at Lime", page)
         self.assertIn('id="sources"', page)
+        self.assertIn("answer.textContent = payload.answer;", page)
+        self.assertNotIn("payload.answer || answer.textContent", page)
 
     def test_eval_dataset_has_at_least_sixty_cases(self):
         with open("app/eval/qas.yaml", encoding="utf-8") as handle:

@@ -52,7 +52,6 @@ if os.getenv("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGCHAIN_PROJECT", "interview-me-agent")
 
 from services.ingest_index import ensure_index  # noqa: E402 - env is hydrated first
-from services.settings import LINKEDIN_PROFILE_URL  # noqa: E402
 
 logging.basicConfig(level=os.getenv("APP_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("interview_agent")
@@ -221,7 +220,6 @@ with st.sidebar:
     if headshot_b64:
         st.image(f"data:image/png;base64,{headshot_b64}", width=160, caption="Chivon Powers, PhD")
         st.markdown("[LinkedIn](https://www.linkedin.com/in/chivon-powers-phd-a6730610/) · [GitHub](https://github.com/Chipowers/)")
-        st.success("● Currently at Lime · Senior Data Scientist, Payments & Fraud")
     else:
         st.info("Headshot image not found in /static (see logs).")
 
@@ -273,7 +271,6 @@ st.markdown(
             Ask about my work across AI, data science, product, and research.<br>
             Answers are grounded in approved professional sources and shaped with an evaluation-first mindset.
         </p>
-        <p><a href="{LINKEDIN_PROFILE_URL}" target="_blank">● Currently at Lime · Senior Data Scientist, Payments &amp; Fraud</a></p>
     </div>
     """,
     unsafe_allow_html=True,
